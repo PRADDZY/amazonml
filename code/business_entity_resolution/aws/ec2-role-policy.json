@@ -1,0 +1,38 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadChallengeInputsAndRuntime",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926/input/*",
+        "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926/smoke/*",
+        "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926/code/*"
+      ]
+    },
+    {
+      "Sid": "ListChallengePrefixesAndLocateBucket",
+      "Effect": "Allow",
+      "Action": "s3:GetBucketLocation",
+      "Resource": "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926"
+    },
+    {
+      "Sid": "ListChallengePrefixes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["input", "input/*", "smoke", "smoke/*", "code", "code/*"]
+        }
+      }
+    },
+    {
+      "Sid": "WriteChallengeOutputsAndLogs",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::amazonml-er-ACCOUNT-us-east-1-20260926/output/glue/*"
+    }
+  ]
+}

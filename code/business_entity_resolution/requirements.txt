@@ -1,0 +1,5 @@
+# Installed in the AWS EC2 Spark runtime.
+pyspark==3.5.4
+numpy==1.26.4
+pandas==2.2.3
+pyarrow==18.1.0

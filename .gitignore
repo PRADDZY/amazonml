@@ -1,0 +1,24 @@
+# Challenge-provided data, validator bundle, and local reference PDFs
+/6ab10eb3b23ba_student_resource/
+/6ab5628d5a817_amazon_ml_challenge_problem_statement.pdf
+/4cd78da9-38ed-4832-a95e-e074a69251c7.pdf
+
+# Generated run outputs and submission archives
+/output/
+/DevCore_submission.zip
+/DevCore_submission.zip.tmp
+
+# Python and Spark artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.sparkStaging/
+*.log
+
+# Local environments and credentials
+.venv/
+venv/
+.aws/
+.env
+.env.*
+!.env.example
