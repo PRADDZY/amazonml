@@ -22,10 +22,12 @@ noisy names and Indian scripts especially vulnerable.
 3. Audit retrieval against the full Source 1 index, then build candidate-only
    pair features for names, transliterations, addresses, house numbers, postal
    codes, country/source, and retrieval ranks.
-4. Fit CPU LightGBM models on AWS. Five held-out folds are keyed by complete
-   Source 1 entity groups. Training rows exclude both the held-out query group
-   and held-out candidate reference group. Target and reference IDs select folds
-   only and never enter model features.
+4. Fit CPU LightGBM models on AWS. Positive targets use their owning Source 1
+   entity's fold; unmatched targets use a deterministic target-ID fold. Every
+   candidate for one target is scored by the same held-out model. Training rows
+   exclude the held-out target and reference folds, while the fifth Source 1
+   reference fold is excluded from all training splits. IDs select folds only
+   and never enter model features.
 5. For every held-out target, select at most one reference candidate. Tune the
    candidate cap and confidence threshold against the exact per-Source-1 macro
    F0.5, including entities with no true or predicted matches. The submission
@@ -46,11 +48,13 @@ References informing the design:
 
 The first experiment is a CPU retrieval audit, not an LLM deployment. All real
 data indexing, training, and inference run on AWS. No external business identities,
-addresses, labels, competitor models, or predictions enter the pipeline. The first
-worker exposed an archive extraction path error before it read challenge data; the
-bootstrap now uses explicit ZIP extraction and verifies the expected source files.
-The corrected retrieval pilot is running. It has not yet supplied new recall or
-score measurements, so the 0.990788 leaderboard result remains an unverified target.
+addresses, labels, competitor models, or predictions enter the pipeline. Two
+worker attempts stopped before reading challenge data: the first exposed an
+archive extraction path error, and the second exited during Python environment
+setup. The bootstrap now extracts source files explicitly, installs dependencies
+into an isolated package directory, and logs the exact failing step. A third
+retrieval pilot started at 2026-09-26 18:07:42 UTC. It has not yet supplied new
+recall or score measurements, so 0.990788 remains an unverified target.
 
 The user authorized up to $100 for this improvement effort on September 26,
 replacing the earlier $90 ceiling. Each worker has an independent shutdown timer,
