@@ -53,8 +53,15 @@ folder with the AWS CLI helper:
 ```
 
 The helper leaves the current `output/` files untouched. Validate the fetched
-files, then promote them into `output/` and package with
-`aws/package-submission.ps1`.
+files and create the final archive with:
+
+```powershell
+.\code\business_entity_resolution\aws\promote-v2.ps1 `
+  -ResultsDirectory .\output\v2\results-<run-timestamp>
+```
+
+The promotion script runs the organizer's validator first, backs up the current
+files and archive, then creates `DevCore_submission.zip` from the validated TSVs.
 
 The older Spark implementation below remains the baseline path. The v2 run is
 promoted only after its held-out audit and official submission validation pass.
