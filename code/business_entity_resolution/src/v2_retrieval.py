@@ -11,8 +11,8 @@ from pathlib import Path
 from v2_text import Record
 
 LOG = logging.getLogger("v2.retrieval")
-INDEX_VERSION = "unicode-bm25-v1"
-FIELDS = ("name", "address", "nw", "aw")
+INDEX_VERSION = "unicode-bm25-v2"
+FIELDS = ("name", "name_core", "address", "address_core", "nw", "ncw", "aw", "acw")
 
 
 def rows(path: Path):
@@ -37,7 +37,13 @@ def build_index(source1_path: Path, root: Path, threads: int = 4) -> dict:
     with source1_path.open("rb") as stream:
         for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(block)
-    signature = {"version": INDEX_VERSION, "source_sha256": digest.hexdigest()}
+    text_digest = hashlib.sha256(Path(__file__).with_name("v2_text.py").read_bytes()).hexdigest()
+    signature = {
+        "version": INDEX_VERSION,
+        "source_sha256": digest.hexdigest(),
+        "text_code_sha256": text_digest,
+        "tantivy_version": tantivy.__version__,
+    }
     manifest = root / "manifest.json"
     if manifest.exists():
         saved = json.loads(manifest.read_text())
@@ -95,22 +101,21 @@ class Retriever:
             self.searchers[country] = self.indexes[country].searcher()
         index, searcher = self.indexes[country], self.searchers[country]
         fields = record.fields()
-        queries = {}
-        for field, terms in fields.items():
-            if terms:
-                queries[field] = tantivy.Query.boolean_query([
-                    (tantivy.Occur.Should, tantivy.Query.term_query(index.schema, field, term, "freq"))
-                    for term in terms
-                ])
         variants = {
-            "joint": {"name": 1.5, "address": 1.0, "nw": 2.0, "aw": 1.0},
-            "name": {"name": 1.0, "nw": 1.0},
-            "address": {"address": 1.0, "aw": 1.0},
+            "joint": {"name": 1.0, "name_core": 1.5, "nw": 1.5, "ncw": 2.0,
+                      "address": 0.8, "address_core": 1.0, "aw": 0.8, "acw": 1.0},
+            "name": {"name": 1.0, "name_core": 1.2, "nw": 1.0, "ncw": 1.2},
+            "address": {"address": 1.0, "address_core": 1.2, "aw": 1.0, "acw": 1.2},
         }
         result = {}
         for variant, weights in variants.items():
-            clauses = [(tantivy.Occur.Should, tantivy.Query.boost_query(queries[field], weight))
-                       for field, weight in weights.items() if field in queries]
+            clauses = [
+                (tantivy.Occur.Should, tantivy.Query.boost_query(
+                    tantivy.Query.term_query(index.schema, field, term, "freq"), weight
+                ))
+                for field, weight in weights.items()
+                for term in fields[field]
+            ]
             if not clauses:
                 continue
             query = tantivy.Query.boolean_query(clauses)

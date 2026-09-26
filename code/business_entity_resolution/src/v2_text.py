@@ -60,20 +60,37 @@ class Record:
     address: str
     roman_name: str
     roman_address: str
+    raw_name: str = ""
+    raw_address: str = ""
+    core_name: str = ""
+    roman_core_name: str = ""
 
     @classmethod
     def from_row(cls, row: dict[str, str]) -> "Record":
-        name = clean_name(row.get("business_name", ""))
-        address = clean_address(row.get("business_address", ""))
-        return cls(row["entity_id"], row["country"], name, address,
-                   clean_name(romanize(name)), clean_address(romanize(address)))
+        raw_name = normalize(WEB.sub(" ", row.get("business_name", "")).replace("&", " and "))
+        raw_address = clean_address(WEB.sub(" ", row.get("business_address", "")))
+        name = clean_name(raw_name)
+        roman_name = romanize(raw_name)
+        address = raw_address
+        roman_address = clean_address(romanize(raw_address))
+        return cls(
+            row["entity_id"], row["country"], name, address,
+            clean_name(roman_name), roman_address, raw_name, raw_address,
+            clean_name(raw_name), clean_name(roman_name),
+        )
 
     def fields(self) -> dict[str, list[str]]:
+        roman_raw_name = romanize(self.raw_name or self.name)
+        roman_raw_address = romanize(self.raw_address or self.address)
         return {
-            "name": sorted(grams(self.name) | grams(self.roman_name)),
-            "address": sorted(grams(self.address) | grams(self.roman_address)),
-            "nw": sorted(set(self.name.split()) | set(self.roman_name.split())),
-            "aw": sorted(set(self.address.split()) | set(self.roman_address.split())),
+            "name": sorted(grams(self.raw_name or self.name) | grams(roman_raw_name)),
+            "name_core": sorted(grams(self.core_name or self.name) | grams(self.roman_core_name or self.roman_name)),
+            "address": sorted(grams(self.raw_address or self.address) | grams(roman_raw_address)),
+            "address_core": sorted(grams(self.address) | grams(self.roman_address)),
+            "nw": sorted(set((self.raw_name or self.name).split()) | set(roman_raw_name.split())),
+            "ncw": sorted(set((self.core_name or self.name).split()) | set((self.roman_core_name or self.roman_name).split())),
+            "aw": sorted(set((self.raw_address or self.address).split()) | set(roman_raw_address.split())),
+            "acw": sorted(set(self.address.split()) | set(self.roman_address.split())),
         }
 
 

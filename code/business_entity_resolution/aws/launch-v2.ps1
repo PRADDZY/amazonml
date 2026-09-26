@@ -30,7 +30,7 @@ $bucket = "amazonml-er-$account-us-east-1-20260926"
 $bucketUri = "s3://$bucket"
 $runUri = "$bucketUri/output/v2/$Mode-$label"
 $codeUri = "$bucketUri/code/v2/$label/code.zip"
-$cacheUri = "$bucketUri/output/v2/cache/unicode-bm25-v1/train"
+$cacheUri = "$bucketUri/output/v2/cache/unicode-bm25-v2/train"
 $archive = Join-Path $stage 'code.zip'
 Compress-Archive -Path (Join-Path $packageRoot 'src'),(Join-Path $packageRoot 'requirements-v2.txt') -DestinationPath $archive
 $null = Invoke-Aws @('s3','cp',$archive,$codeUri,'--region',$region,'--only-show-errors')
@@ -72,7 +72,9 @@ SYNC_PID=$!
 dnf install -y python3.11 python3.11-pip libgomp
 python3.11 -m venv /opt/devcore-v2/venv
 aws s3 cp '__CODE__' /opt/devcore-v2/code.zip --region us-east-1 --only-show-errors
-python3.11 -m zipfile -e /opt/devcore-v2/code.zip /opt/devcore-v2/code
+python3.11 -c "import zipfile; zipfile.ZipFile('/opt/devcore-v2/code.zip').extractall('/opt/devcore-v2/code')"
+test -f /opt/devcore-v2/code/src/v2_cloud_smoke.py
+test -f /opt/devcore-v2/code/requirements-v2.txt
 /opt/devcore-v2/venv/bin/pip install --no-cache-dir -r /opt/devcore-v2/code/requirements-v2.txt
 status SMOKE_TEST
 /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_cloud_smoke.py
