@@ -7,6 +7,9 @@
 /output/
 /DevCore_submission.zip
 /DevCore_submission.zip.tmp
+/DevCore_submission/
+/Unstop - *.html
+/Unstop - *_files/
 
 # Python and Spark artifacts
 __pycache__/
