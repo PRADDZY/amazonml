@@ -53,6 +53,30 @@ Run the synthetic smoke test, then the full challenge data:
 .\code\business_entity_resolution\aws\run-ec2.ps1
 ```
 
+If the local launcher exits while the EC2 run is still active, continue with AWS
+CLI using the run URI printed when the instance was started:
+
+```powershell
+$runUri = "s3://<bucket>/output/glue/<run-id>"
+aws s3 cp "$runUri/status.txt" - --region us-east-1
+aws s3 cp "$runUri/logs/job.log" - --region us-east-1 | Select-Object -Last 40
+```
+
+When the status is `SUCCEEDED`, retrieve the partitioned outputs and flatten them
+for the submission package:
+
+```powershell
+New-Item -ItemType Directory -Force -Path .\output\candidate_parts, .\output\matching_parts, .\output\metrics_parts | Out-Null
+aws s3 cp "$runUri/submission/candidate_pairs/" .\output\candidate_parts --recursive --region us-east-1 --only-show-errors
+aws s3 cp "$runUri/submission/matching_results/" .\output\matching_parts --recursive --region us-east-1 --only-show-errors
+aws s3 cp "$runUri/metrics/" .\output\metrics_parts --recursive --region us-east-1 --only-show-errors
+python .\code\business_entity_resolution\src\materialize_output.py `
+  --candidate-parts .\output\candidate_parts `
+  --matching-parts .\output\matching_parts `
+  --metrics-parts .\output\metrics_parts `
+  --output-dir .\output
+```
+
 After the full job succeeds, run the challenge validator and create the team archive:
 
 ```powershell
