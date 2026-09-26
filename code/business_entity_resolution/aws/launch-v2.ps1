@@ -64,33 +64,40 @@ finish() {
   shutdown -h now
 }
 trap finish EXIT
+trap 'rc=$?; echo "BOOTSTRAP ERROR exit=$rc line=$LINENO command=$BASH_COMMAND" >&2' ERR
 status BOOTSTRAPPING
 (while sleep 60; do
  aws s3 cp /var/log/devcore-v2.log "$RUN_URI/job.log" --region us-east-1 --only-show-errors >/dev/null 2>&1 || true
 done) &
 SYNC_PID=$!
+echo STEP_INSTALL_OS_PACKAGES
 dnf install -y python3.11 python3.11-pip libgomp
-python3.11 -m venv /opt/devcore-v2/venv
+echo STEP_DOWNLOAD_CODE
 aws s3 cp '__CODE__' /opt/devcore-v2/code.zip --region us-east-1 --only-show-errors
 python3.11 -c "import zipfile; zipfile.ZipFile('/opt/devcore-v2/code.zip').extractall('/opt/devcore-v2/code')"
 test -f /opt/devcore-v2/code/src/v2_cloud_smoke.py
 test -f /opt/devcore-v2/code/requirements-v2.txt
-/opt/devcore-v2/venv/bin/pip install --no-cache-dir -r /opt/devcore-v2/code/requirements-v2.txt
+echo STEP_INSTALL_PYTHON_PACKAGES
+mkdir -p /opt/devcore-v2/site-packages
+python3.11 -m pip --version
+python3.11 -m pip install --no-cache-dir --target=/opt/devcore-v2/site-packages -r /opt/devcore-v2/code/requirements-v2.txt
+export PYTHONPATH="/opt/devcore-v2/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+echo STEP_SMOKE_TEST
 status SMOKE_TEST
-/opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_cloud_smoke.py
+python3.11 /opt/devcore-v2/code/src/v2_cloud_smoke.py
 status DOWNLOADING_DATA
 aws s3 sync "$BUCKET_URI/input/train/" /opt/devcore-v2/data/train/ --region us-east-1 --only-show-errors
 aws s3 sync "$CACHE_URI/" /opt/devcore-v2/index/ --region us-east-1 --only-show-errors
 if [ '__MODE__' = 'probe' ]; then
   status RUNNING_PROBE
-  timeout __SECONDS__ /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_probe.py \
+  timeout __SECONDS__ python3.11 /opt/devcore-v2/code/src/v2_probe.py \
    --train-dir /opt/devcore-v2/data/train --index-dir /opt/devcore-v2/index \
    --output-dir /opt/devcore-v2/results --workers 8 --sample-modulus __MODULUS__
 else
   mkdir -p /opt/devcore-v2/data/test
   aws s3 sync "$BUCKET_URI/input/test/" /opt/devcore-v2/data/test/ --region us-east-1 --only-show-errors
   status RUNNING_TRAIN_EVAL_AND_TEST
-  timeout __SECONDS__ /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_pipeline.py \
+  timeout __SECONDS__ python3.11 /opt/devcore-v2/code/src/v2_pipeline.py \
    --train-dir /opt/devcore-v2/data/train --test-dir /opt/devcore-v2/data/test \
    --index-dir /opt/devcore-v2/index --output-dir /opt/devcore-v2/results --workers 8
 fi
