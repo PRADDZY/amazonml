@@ -61,7 +61,11 @@ python .\code\business_entity_resolution\aws\package_submission.py
 
 The archive is named `DevCore_submission.zip` and contains both required TSVs,
 `code/business_entity_resolution/`, and `Documentation_template.md`. The Python
-package script runs the provided validator before creating the archive.
+package script runs the provided validator on scored matches, then streams
+`candidate_pairs.tsv` to check that every test Source 1 ID appears once, each
+candidate ID has an S2/S3 prefix, each list is duplicate-free, and the selected
+per-target-source cap is respected. The Spark job also checks that every final
+match appears in the candidate set before writing either submission file.
 
 Run the standard-library unit tests locally with:
 
