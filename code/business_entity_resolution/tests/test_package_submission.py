@@ -2,7 +2,37 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aws.package_submission import validate_candidate_file
+from aws.package_submission import render_documentation, validate_candidate_file
+
+
+class DocumentationRenderingTests(unittest.TestCase):
+    def test_renders_runtime_without_requesting_cost_data(self):
+        metrics = {
+            "selected_cap_per_source": 1,
+            "selected_candidate_recall": 1.0,
+            "candidate_pairs": 2,
+            "candidate_reduction_ratio": 0.9,
+            "selected_threshold": 0.5,
+            "validation_macro_f0_5": 0.8,
+            "validation_pair_decisions": {
+                "true_positives": 2,
+                "false_positives": 0,
+                "false_negatives": 0,
+                "missed_by_blocking": 0,
+            },
+            "runtime_seconds": 5400,
+            "candidate_count_mean": 1.0,
+            "candidate_count_median": 1,
+            "candidate_count_p95": 2,
+            "candidate_count_p99": 2,
+            "candidate_count_max": 2,
+            "per_country": {"US": {"candidate_pairs": 2, "source1_rows": 2}},
+        }
+
+        rendered = render_documentation(metrics)
+
+        self.assertIn("**AWS EC2 runtime:** 1.50 hours.", rendered)
+        self.assertNotIn("cost", rendered.lower())
 
 
 class CandidateFileValidationTests(unittest.TestCase):

@@ -77,8 +77,7 @@ instance terminates when its bootstrap script exits. Spark writes partitioned TS
 parts; the packaging helper streams them into flat submission files. Model fitting,
 validation, and full test inference run on AWS. There is no hosted endpoint.
 
-**AWS EC2 runtime and estimated compute/storage cost:** To be filled from the
-completed job run.  
+- **AWS EC2 runtime:** To be filled from the completed job run.
 **Candidate count mean / median / p95 / p99 / max:** To be filled from
 `output/metrics.json`.  
 **Per-country counts:** To be filled from `output/metrics.json`.

@@ -55,9 +55,8 @@ def render_documentation(metrics: dict[str, Any]) -> str:
             f"{validation_decisions['false_positives']:,} false positives, "
             f"{validation_decisions['false_negatives']:,} false negatives; "
             f"{validation_decisions['missed_by_blocking']:,} true links missed by blocking.",
-        "**AWS EC2 runtime and estimated compute/storage cost:** To be filled from the\n"
-        "completed job run.  ":
-            f"**AWS EC2 runtime:** {metrics['runtime_seconds'] / 3600:.2f} hours.  ",
+        "- **AWS EC2 runtime:** To be filled from the completed job run.":
+            f"- **AWS EC2 runtime:** {metrics['runtime_seconds'] / 3600:.2f} hours.",
         "**Candidate count mean / median / p95 / p99 / max:** To be filled from\n"
         "`output/metrics.json`.  ":
             "**Candidate count mean / median / p95 / p99 / max:** "
