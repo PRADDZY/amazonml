@@ -64,7 +64,7 @@ finish() {
   shutdown -h now
 }
 trap finish EXIT
-trap 'rc=$?; echo "BOOTSTRAP ERROR exit=$rc line=$LINENO command=$BASH_COMMAND" >&2' ERR
+trap 'rc=$?; echo "BOOTSTRAP ERROR exit=$rc line=$LINENO command=$BASH_COMMAND" >&2; exit "$rc"' ERR
 status BOOTSTRAPPING
 (while sleep 60; do
  aws s3 cp /var/log/devcore-v2.log "$RUN_URI/job.log" --region us-east-1 --only-show-errors >/dev/null 2>&1 || true
