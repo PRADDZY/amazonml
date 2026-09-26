@@ -48,13 +48,14 @@ References informing the design:
 
 The first experiment is a CPU retrieval audit, not an LLM deployment. All real
 data indexing, training, and inference run on AWS. No external business identities,
-addresses, labels, competitor models, or predictions enter the pipeline. Two
+addresses, labels, competitor models, or predictions enter the pipeline. Three
 worker attempts stopped before reading challenge data: the first exposed an
-archive extraction path error, and the second exited during Python environment
-setup. The bootstrap now extracts source files explicitly, installs dependencies
-into an isolated package directory, and logs the exact failing step. A third
-retrieval pilot started at 2026-09-26 18:07:42 UTC. It has not yet supplied new
-recall or score measurements, so 0.990788 remains an unverified target.
+archive extraction path error, the second exited during Python environment
+setup, and the third showed that Windows ZIP separators were not normalized on
+Linux. The bootstrap now installs dependencies into an isolated package
+directory, safely normalizes archive paths, and logs the exact failing step. A
+fourth retrieval pilot started at 2026-09-26 18:23:51 UTC. It has not yet supplied
+new recall or score measurements, so 0.990788 remains an unverified target.
 
 The user authorized up to $100 for this improvement effort on September 26,
 replacing the earlier $90 ceiling. Each worker has an independent shutdown timer,
