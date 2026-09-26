@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import zipfile
@@ -75,6 +76,67 @@ def render_documentation(metrics: dict[str, Any]) -> str:
     return text
 
 
+def validate_candidate_file(path: Path, test_source1: Path, cap_per_source: int) -> tuple[int, int]:
+    """Validate candidate rows in bounded memory without retaining candidate pairs."""
+    if cap_per_source < 1:
+        raise ValueError("Candidate cap must be a positive integer")
+
+    required: set[str] = set()
+    with test_source1.open("r", encoding="utf-8-sig", newline="") as source:
+        next(source, None)
+        for line in source:
+            if line.strip():
+                required.add(line.split("\t", 1)[0].strip())
+    if not required:
+        raise ValueError(f"No Source 1 entity IDs found in {test_source1}")
+
+    rows = empty_rows = 0
+    expected_header = "source1_entity_id\tcandidate_entity_ids"
+    with path.open("r", encoding="utf-8-sig", newline="") as candidates:
+        header = candidates.readline().rstrip("\r\n")
+        if header != expected_header:
+            raise ValueError(f"Unexpected candidate header: {header!r}")
+
+        for line_number, line in enumerate(candidates, start=2):
+            row = line.rstrip("\r\n")
+            source1_id, separator, raw_ids = row.partition("\t")
+            if not separator or not source1_id or source1_id.strip() != source1_id:
+                raise ValueError(f"Malformed candidate row at line {line_number}")
+            if source1_id not in required:
+                raise ValueError(
+                    f"Duplicate or unknown Source 1 ID in candidate file at line {line_number}: "
+                    f"{source1_id}"
+                )
+            required.remove(source1_id)
+
+            ids = raw_ids.split(",") if raw_ids else []
+            if any(not entity_id for entity_id in ids):
+                raise ValueError(f"Empty candidate ID at line {line_number}")
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"Repeated candidate ID at line {line_number}")
+            s2_count = sum(entity_id.startswith("S2-") for entity_id in ids)
+            s3_count = sum(entity_id.startswith("S3-") for entity_id in ids)
+            if s2_count + s3_count != len(ids):
+                raise ValueError(f"Candidate ID has an invalid source prefix at line {line_number}")
+            if s2_count > cap_per_source or s3_count > cap_per_source:
+                raise ValueError(
+                    f"Candidate cap exceeded at line {line_number}: "
+                    f"S2={s2_count}, S3={s3_count}, cap={cap_per_source}"
+                )
+            rows += 1
+            empty_rows += not ids
+
+    if required:
+        examples = ", ".join(sorted(required)[:5])
+        raise ValueError(f"Candidate file is missing {len(required):,} Source 1 rows; e.g. {examples}")
+
+    print(
+        f"  candidate_pairs.tsv: {rows:,} rows ({empty_rows:,} empty); "
+        f"at most {cap_per_source} candidates per target source."
+    )
+    return rows, empty_rows
+
+
 def main() -> int:
     matching = OUTPUT_ROOT / "matching_results.tsv"
     candidates = OUTPUT_ROOT / "candidate_pairs.tsv"
@@ -91,20 +153,21 @@ def main() -> int:
             str(validator),
             "--matching",
             str(matching),
-            "--candidate",
-            str(candidates),
             "--test-dir",
             str(STUDENT_ROOT / "dataset" / "test"),
         ],
         cwd=STUDENT_ROOT,
         check=True,
     )
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    validate_candidate_file(
+        candidates,
+        STUDENT_ROOT / "dataset" / "test" / "test_source1.tsv",
+        int(metrics["selected_cap_per_source"]),
+    )
 
     temporary_archive = ARCHIVE.with_suffix(".zip.tmp")
     try:
-        import json
-
-        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         documentation = render_documentation(metrics)
         with zipfile.ZipFile(
             temporary_archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
