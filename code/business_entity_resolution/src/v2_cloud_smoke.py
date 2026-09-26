@@ -3,6 +3,9 @@ import csv
 import tempfile
 from pathlib import Path
 
+import numpy
+import pyarrow
+from anyascii import anyascii
 from v2_retrieval import Retriever, build_index
 from v2_text import Record
 
@@ -35,7 +38,9 @@ def main():
         empty = Record("S2-4", "US", "", "", "", "")
         assert retriever.retrieve(empty) == {}
     import lightgbm, rapidfuzz, tantivy
-    print("AWS integration smoke passed", lightgbm.__version__, rapidfuzz.__version__, tantivy.__version__, flush=True)
+    assert anyascii("東京")
+    print("AWS integration smoke passed", numpy.__version__, pyarrow.__version__,
+          lightgbm.__version__, rapidfuzz.__version__, tantivy.__version__, flush=True)
 
 
 if __name__ == "__main__":
