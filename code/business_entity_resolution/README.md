@@ -45,6 +45,17 @@ Run the new full path from the workspace root after the probe finishes:
 .\code\business_entity_resolution\aws\launch-v2.ps1 -Mode full -MaxHours 12
 ```
 
+After a successful full run, download its files and metrics into a versioned
+folder with the AWS CLI helper:
+
+```powershell
+.\code\business_entity_resolution\aws\fetch-v2.ps1
+```
+
+The helper leaves the current `output/` files untouched. Validate the fetched
+files, then promote them into `output/` and package with
+`aws/package-submission.ps1`.
+
 The older Spark implementation below remains the baseline path. The v2 run is
 promoted only after its held-out audit and official submission validation pass.
 
