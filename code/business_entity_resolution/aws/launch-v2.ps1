@@ -74,7 +74,26 @@ echo STEP_INSTALL_OS_PACKAGES
 dnf install -y python3.11 python3.11-pip libgomp
 echo STEP_DOWNLOAD_CODE
 aws s3 cp '__CODE__' /opt/devcore-v2/code.zip --region us-east-1 --only-show-errors
-python3.11 -c "import zipfile; zipfile.ZipFile('/opt/devcore-v2/code.zip').extractall('/opt/devcore-v2/code')"
+echo STEP_EXTRACT_CODE
+python3.11 - <<'PY'
+from pathlib import Path, PurePosixPath
+from shutil import copyfileobj
+from zipfile import ZipFile
+
+root = Path('/opt/devcore-v2/code')
+with ZipFile('/opt/devcore-v2/code.zip') as archive:
+    for member in archive.infolist():
+        relative = PurePosixPath(member.filename.replace('\\', '/'))
+        if relative.is_absolute() or '..' in relative.parts:
+            raise ValueError(f'Unsafe ZIP member path: {member.filename!r}')
+        target = root.joinpath(*relative.parts)
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(member) as source, target.open('wb') as destination:
+            copyfileobj(source, destination)
+PY
 test -f /opt/devcore-v2/code/src/v2_cloud_smoke.py
 test -f /opt/devcore-v2/code/requirements-v2.txt
 echo STEP_INSTALL_PYTHON_PACKAGES
