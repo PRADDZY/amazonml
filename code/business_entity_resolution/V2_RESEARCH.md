@@ -54,8 +54,14 @@ archive extraction path error, the second exited during Python environment
 setup, and the third showed that Windows ZIP separators were not normalized on
 Linux. The bootstrap now installs dependencies into an isolated package
 directory, safely normalizes archive paths, and logs the exact failing step. A
-fourth retrieval pilot started at 2026-09-26 18:23:51 UTC. It has not yet supplied
-new recall or score measurements, so 0.990788 remains an unverified target.
+fourth retrieval pilot started at 2026-09-26 18:23:51 UTC and succeeded. On a
+deterministic sample of 15,120 labeled US and India targets, the union of joint,
+name, and address retrieval had 99.418% recall when accepting results ranked in
+the top 24 of any view. Per-country recall was 99.548% for US and 99.223% for
+India. This measures retrieval only; it is not the final capped-candidate recall,
+held-out macro F0.5, or leaderboard score. The full cross-fit and test-output run
+started at 2026-09-26 18:39:56 UTC with a 12-hour worker limit. The 0.990788
+leaderboard score remains an unverified target until a final submission is scored.
 
 The user authorized up to $100 for this improvement effort on September 26,
 replacing the earlier $90 ceiling. Each worker has an independent shutdown timer,
