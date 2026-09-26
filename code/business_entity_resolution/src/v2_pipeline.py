@@ -189,7 +189,7 @@ def _write_training_features(train_dir: Path, index_root: Path, output_dir: Path
 
 
 def _score_counts(probabilities: np.ndarray, candidate_rids: np.ndarray, owners: np.ndarray,
-                  truth_counts: np.ndarray, source1_countries: list[str]):
+                  truth_counts: np.ndarray, source1_countries: list[str], reference_folds: np.ndarray):
     n_targets = candidate_rids.shape[0]
     n_refs = len(truth_counts)
     thresholds = np.asarray(THRESHOLDS, dtype=np.float32)
@@ -216,7 +216,9 @@ def _score_counts(probabilities: np.ndarray, candidate_rids: np.ndarray, owners:
             denominator = predicted + 0.25 * truth_counts
             nonempty = denominator > 0
             scores[cap_i, threshold_i, nonempty] = 1.25 * tp[nonempty] / denominator[nonempty]
-    mean_scores = scores.mean(axis=2)
+    calibration_entities = reference_folds != FOLDS - 1
+    audit_entities = reference_folds == FOLDS - 1
+    mean_scores = scores[:, :, calibration_entities].mean(axis=2)
     best_score = float(mean_scores.max())
     eligible = np.argwhere(mean_scores >= best_score - 0.0002)
     best_cap_i, best_threshold_i = min(
@@ -227,6 +229,8 @@ def _score_counts(probabilities: np.ndarray, candidate_rids: np.ndarray, owners:
         "cap_per_target": int(CAPS[int(best_cap_i)]),
         "threshold": float(thresholds[int(best_threshold_i)]),
         "macro_f0_5": float(mean_scores[best_cap_i, best_threshold_i]),
+        "audit_macro_f0_5": float(scores[best_cap_i, best_threshold_i, audit_entities].mean()),
+        "audit_source1_entities": int(audit_entities.sum()),
         "candidate_pairs": int(np.sum(candidate_rids[:, :CAPS[int(best_cap_i)]] >= 0)),
     }
     grid = []
@@ -235,11 +239,11 @@ def _score_counts(probabilities: np.ndarray, candidate_rids: np.ndarray, owners:
         for threshold_i, threshold in enumerate(thresholds):
             row[f"macro_f0_5@{threshold:g}"] = float(mean_scores[cap_i, threshold_i])
         grid.append(row)
-    best_tp = true_positives[best_cap_i, best_threshold_i]
-    best_pred = predictions[best_cap_i, best_threshold_i]
+    best_tp = true_positives[best_cap_i, best_threshold_i, calibration_entities]
+    best_pred = predictions[best_cap_i, best_threshold_i, calibration_entities]
     country_scores = {}
     for name, code in (("US", 0), ("India", 1), ("France", 2), ("Other", 3)):
-        members = country_index == code
+        members = (country_index == code) & calibration_entities
         if members.any():
             country_scores[name] = float(scores[best_cap_i, best_threshold_i, members].mean())
     operating["per_country_macro_f0_5"] = country_scores
@@ -267,6 +271,9 @@ def _fit_oof(feature_path: Path, target_path: Path, references: list[Record], ow
     del feature_table
     target_owner = targets["owner"].to_numpy(zero_copy_only=False).astype(np.int32, copy=False)
     source1_countries = [reference.country for reference in references]
+    reference_folds = np.asarray(
+        [entity_partition(reference.entity_id, FOLDS) for reference in references], dtype=np.int8,
+    )
     truth_counts = np.bincount(target_owner[target_owner >= 0], minlength=len(references)).astype(np.int32)
     y = label.astype(np.float32, copy=False)
     oof = np.full((X.shape[0],), np.nan, dtype=np.float32)
@@ -308,7 +315,8 @@ def _fit_oof(feature_path: Path, target_path: Path, references: list[Record], ow
         found &= target_owner >= 0
         candidate_recall[str(cap)] = float(found.sum() / max(1, len(owners)))
     operating, grid, _, _ = _score_counts(
-        probability_matrix, candidate_matrix, target_owner, truth_counts, source1_countries,
+        probability_matrix, candidate_matrix, target_owner, truth_counts,
+        source1_countries, reference_folds,
     )
     for row in grid:
         row["candidate_recall"] = candidate_recall[str(row["cap_per_target"])]

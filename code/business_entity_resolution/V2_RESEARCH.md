@@ -30,7 +30,8 @@ noisy names and Indian scripts especially vulnerable.
    candidate cap and confidence threshold against the exact per-Source-1 macro
    F0.5, including entities with no true or predicted matches. The submission
    candidate file contains the full pre-threshold candidate set seen by the
-   matcher; every predicted match must be in that set.
+   matcher; every predicted match must be in that set. Four folds select the
+   operating point; the fifth fold reports a separate entity-level audit score.
 
 References informing the design:
 
