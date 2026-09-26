@@ -59,14 +59,23 @@ deterministic sample of 15,120 labeled US and India targets, the union of joint,
 name, and address retrieval had 99.418% recall when accepting results ranked in
 the top 24 of any view. Per-country recall was 99.548% for US and 99.223% for
 India. This measures retrieval only; it is not the final capped-candidate recall,
-held-out macro F0.5, or leaderboard score. The full cross-fit and test-output run
-started at 2026-09-26 18:39:56 UTC with a 12-hour worker limit. The 0.990788
-leaderboard score remains an unverified target until a final submission is scored.
+held-out macro F0.5, or leaderboard score.
 
-The user authorized up to $100 for this improvement effort on September 26,
-replacing the earlier $90 ceiling. Each worker has an independent shutdown timer,
-encrypted storage deleted on termination, and a finite job timeout. Only one
-worker is launched at a time. Status checks are 15 minutes apart.
+The first full V2 launch was rejected because `r6i.16xlarge` required 64 standard
+EC2 vCPUs while `us-east-1` had quota 8. That attempt was terminated; the later
+request for a quota increase does not gate the split workflow. The split launcher
+assigns target records to deterministic, disjoint feature and test shards across
+regions, merges every feature shard before a single cross-fit model and global
+operating-point selection, then merges test outputs by Source 1 entity. This
+keeps the original training and evaluation procedure intact while using the
+independent regional EC2 quotas. Shards must all report success before the next
+phase starts. The 0.990788 leaderboard score remains an unverified target until
+a final submission is scored.
+
+The user authorized use of the available $100 AWS credits for this improvement
+effort, replacing the earlier $90 ceiling. Each worker has an independent shutdown
+timer, encrypted storage deleted on termination, and a finite job timeout. Worker
+status is checked at 15-minute intervals, with local work continuing between checks.
 
 The 0.990788 leaderboard score is a target, not a claimed result. No new full
 submission is promoted solely because its process completed successfully.

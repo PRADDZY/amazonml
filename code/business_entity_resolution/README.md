@@ -68,6 +68,46 @@ metrics from the AWS run, backs up the current files and archive, then creates
 The older Spark implementation below remains the baseline path. The v2 run is
 promoted only after its held-out audit and official submission validation pass.
 
+### Split v2 run when one large EC2 quota is unavailable
+
+`aws/launch-v2-split.ps1` runs the same v2 feature generation and test inference as
+hash-partitioned AWS jobs. Six `r6i.xlarge` workers are placed across enabled
+regions with capacity; the feature shards are merged before one global cross-fit
+fit and operating-point selection, so every shard contributes to the same model
+and exact macro F0.5 calibration. Test shards use the resulting shared model and
+index, then a final AWS job merges the candidate and match rows. The launcher
+checks each region's vCPU quota and running instances before it starts compute.
+
+Start the feature shards, and check their S3 status about every 15 minutes:
+
+```powershell
+.\code\business_entity_resolution\aws\launch-v2-split.ps1 -Phase features
+.\code\business_entity_resolution\aws\status-v2-split.ps1
+```
+
+Only start the next phase after all six workers report `SUCCEEDED`:
+
+```powershell
+.\code\business_entity_resolution\aws\launch-v2-split.ps1 -Phase fit
+.\code\business_entity_resolution\aws\status-v2-split.ps1
+.\code\business_entity_resolution\aws\launch-v2-split.ps1 -Phase test
+.\code\business_entity_resolution\aws\status-v2-split.ps1
+.\code\business_entity_resolution\aws\launch-v2-split.ps1 -Phase finalize
+```
+
+Fetch and promote only after finalization succeeds:
+
+```powershell
+.\code\business_entity_resolution\aws\fetch-v2-split.ps1
+.\code\business_entity_resolution\aws\promote-v2.ps1 `
+  -ResultsDirectory .\output\v2\results-<run-id>
+```
+
+Each phase stores status, logs, and artifacts in its run-specific S3 prefix and
+terminates its workers when complete. The final candidate file is merged from all
+test shards before packaging, and the baseline submission stays in place until
+the organizer validator passes.
+
 ## Baseline Spark run
 
 The launcher uses AWS CLI only and runs in `us-east-1`, beside the challenge S3

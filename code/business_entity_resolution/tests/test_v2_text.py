@@ -22,6 +22,17 @@ class UnicodeRetrievalTests(unittest.TestCase):
     def test_fold_is_deterministic(self):
         self.assertEqual(entity_partition("S1-123", 500), entity_partition("S1-123", 500))
 
+    def test_shard_assignment_covers_each_entity_once(self):
+        entity_ids = [f"S2-{index}" for index in range(1000)]
+        assigned = [
+            [entity_id for entity_id in entity_ids if entity_partition(entity_id, 6) == shard]
+            for shard in range(6)
+        ]
+        flattened = [entity_id for shard in assigned for entity_id in shard]
+        self.assertEqual(len(flattened), len(entity_ids))
+        self.assertEqual(set(flattened), set(entity_ids))
+        self.assertTrue(all(assigned))
+
 
 if __name__ == "__main__":
     unittest.main()

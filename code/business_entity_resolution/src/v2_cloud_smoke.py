@@ -5,8 +5,10 @@ from pathlib import Path
 
 import numpy
 import pyarrow
+import pyarrow.parquet as pq
 from anyascii import anyascii
 from v2_retrieval import Retriever, build_index
+import v2_pipeline
 from v2_text import Record
 
 
@@ -20,6 +22,45 @@ def main():
     columns = ("entity_id", "business_name", "business_address", "country")
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        sharding = root / "sharding"
+        sharding.mkdir()
+        columns = ("entity_id", "matched_entity_ids")
+        source_ids = [f"S2-{index}" for index in range(30)] + [f"S3-{index}" for index in range(30)]
+        for source in (2, 3):
+            path = sharding / f"train_source{source}.tsv"
+            with path.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.writer(stream, delimiter="\t")
+                writer.writerow(columns)
+                writer.writerows((entity_id, "") for entity_id in source_ids if entity_id.startswith(f"S{source}-"))
+            test_path = sharding / f"test_source{source}.tsv"
+            with test_path.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.writer(stream, delimiter="\t")
+                writer.writerow(columns)
+                writer.writerows((entity_id, "") for entity_id in source_ids if entity_id.startswith(f"S{source}-"))
+        owners = {entity_id: index % 4 for index, entity_id in enumerate(source_ids[:12])}
+        v2_pipeline._REFERENCE_FOLDS = numpy.asarray([0, 1, 2, 3], dtype=numpy.int8)
+        training_shards = [
+            list(v2_pipeline._training_tasks(sharding, owners, shard, 3)) for shard in range(3)
+        ]
+        training_ids = [task[1]["entity_id"] for shard in training_shards for task in shard]
+        assert len(training_ids) == len(source_ids) and set(training_ids) == set(source_ids)
+        test_shards = [list(v2_pipeline._test_tasks(sharding, shard, 3)) for shard in range(3)]
+        test_ids = [task[1]["entity_id"] for shard in test_shards for task in shard]
+        assert len(test_ids) == len(source_ids) and set(test_ids) == set(source_ids)
+        parquet_shards = []
+        for shard, values in enumerate(([1, 3], [0, 2])):
+            path = root / f"targets-{shard}.parquet"
+            pq.write_table(
+                pyarrow.table({"seq": values, "owner": [value + 10 for value in values]}), path,
+            )
+            parquet_shards.append(path)
+        merged = root / "targets-merged.parquet"
+        v2_pipeline._merge_parquet_shards(parquet_shards, merged)
+        targets = pq.read_table(merged)
+        order = numpy.argsort(targets["seq"].to_numpy())
+        assert targets["seq"].to_numpy()[order].tolist() == [0, 1, 2, 3]
+        assert targets["owner"].to_numpy()[order].tolist() == [10, 11, 12, 13]
+
         source = root / "source.tsv"
         with source.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.writer(stream, delimiter="\t")

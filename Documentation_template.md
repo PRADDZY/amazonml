@@ -73,11 +73,13 @@ the operating point is selected.
 
 ## AWS execution and artifacts
 
-The full workflow runs on one `r6i.16xlarge` Amazon Linux 2023 EC2 worker in
-`us-east-1`, with 64 CPU workers and an encrypted 200 GB gp3 root volume. AWS
-CLI stages code and data in S3, launches the worker, and retrieves its logs,
-metrics, and output files. A finite process timeout and independent instance
-shutdown limit bound the run. There is no hosted endpoint.
+The workflow runs on six `r6i.xlarge` Amazon Linux 2023 EC2 workers across
+`us-east-1`, `eu-north-1`, `ap-south-1`, and `ca-central-1` for feature and test
+shards. A separate `r6i.2xlarge` worker merges every training shard, fits the
+global cross-fit model, and builds the test index. AWS CLI stages data and source
+in S3 and retrieves each phase's logs, metrics, and output files. Every worker has
+an encrypted gp3 root volume, a finite job timeout, and an independent shutdown
+limit. There is no hosted endpoint.
 
 The final archive contains `output/matching_results.tsv`,
 `output/candidate_pairs.tsv`, the runnable source and AWS launcher, and this

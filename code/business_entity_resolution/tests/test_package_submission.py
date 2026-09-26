@@ -6,32 +6,37 @@ from aws.package_submission import render_documentation, validate_candidate_file
 
 
 class DocumentationRenderingTests(unittest.TestCase):
-    def test_renders_runtime_without_requesting_cost_data(self):
+    def test_renders_v2_metrics_without_requesting_cost_data(self):
         metrics = {
-            "selected_cap_per_source": 1,
-            "selected_candidate_recall": 1.0,
-            "candidate_pairs": 2,
-            "candidate_reduction_ratio": 0.9,
-            "selected_threshold": 0.5,
-            "validation_macro_f0_5": 0.8,
-            "validation_pair_decisions": {
-                "true_positives": 2,
-                "false_positives": 0,
-                "false_negatives": 0,
-                "missed_by_blocking": 0,
+            "training_oof_operating_point": {
+                "cap_per_target": 2,
+                "threshold": 0.5,
+                "macro_f0_5": 0.8,
+                "audit_macro_f0_5": 0.75,
             },
-            "runtime_seconds": 5400,
-            "candidate_count_mean": 1.0,
+            "test_candidate_pairs": 8,
+            "candidate_reduction_ratio": 0.9,
+        }
+        test_metrics = {
+            "candidate_pairs": 8,
+            "candidate_count_mean": 1.5,
             "candidate_count_median": 1,
             "candidate_count_p95": 2,
-            "candidate_count_p99": 2,
-            "candidate_count_max": 2,
-            "per_country": {"US": {"candidate_pairs": 2, "source1_rows": 2}},
+            "candidate_count_p99": 3,
+            "candidate_count_max": 4,
+            "candidate_reduction_ratio": 0.9,
         }
 
-        rendered = render_documentation(metrics)
+        rendered = render_documentation(metrics, test_metrics)
 
-        self.assertIn("**AWS EC2 runtime:** 1.50 hours.", rendered)
+        self.assertIn("**Test candidate-pair count:** 8", rendered)
+        self.assertIn("mean 1.500; median 1.000; p95 2.000; p99 3.000; max 4", rendered)
+        self.assertIn("**Same-country search-space reduction:** 90.00%", rendered)
+        self.assertIn("**Selected candidate cap:** 2", rendered)
+        self.assertIn("**Selected confidence threshold:** 0.5", rendered)
+        self.assertIn("**Cross-fit calibration macro F0.5:** 0.800000", rendered)
+        self.assertIn("**Reserved-fold audit macro F0.5:** 0.750000", rendered)
+        self.assertNotIn("[[", rendered)
         self.assertNotIn("cost", rendered.lower())
 
 

@@ -25,9 +25,34 @@ EXCLUDED_FILES = {
 }
 
 
-def render_documentation(metrics: dict[str, Any]) -> str:
+def render_documentation(metrics: dict[str, Any], test_metrics: dict[str, Any] | None = None) -> str:
     """Fill reportable run metrics into the methodology document."""
     text = DOCUMENTATION.read_text(encoding="utf-8")
+    if "[[SELECTED_CAP]]" in text:
+        operating = metrics["training_oof_operating_point"]
+        test_metrics = test_metrics or metrics
+        replacements = {
+            "[[SELECTED_CANDIDATES_PER_TARGET]]": str(operating["cap_per_target"]),
+            "[[TEST_CANDIDATE_PAIRS]]": f"{test_metrics.get('candidate_pairs', metrics.get('test_candidate_pairs', 0)):,}",
+            "[[CANDIDATE_DISTRIBUTION]]": "mean {mean:.3f}; median {median:.3f}; p95 {p95:.3f}; p99 {p99:.3f}; max {maximum}".format(
+                mean=test_metrics.get("candidate_count_mean", 0),
+                median=test_metrics.get("candidate_count_median", 0),
+                p95=test_metrics.get("candidate_count_p95", 0),
+                p99=test_metrics.get("candidate_count_p99", 0),
+                maximum=test_metrics.get("candidate_count_max", 0),
+            ),
+            "[[CANDIDATE_REDUCTION]]": f"{test_metrics.get('candidate_reduction_ratio', metrics.get('candidate_reduction_ratio', 0)):.2%}",
+            "[[SELECTED_CAP]]": str(operating["cap_per_target"]),
+            "[[SELECTED_THRESHOLD]]": f"{operating['threshold']:.4f}".rstrip("0").rstrip("."),
+            "[[CALIBRATION_F05]]": f"{operating['macro_f0_5']:.6f}",
+            "[[AUDIT_F05]]": f"{operating['audit_macro_f0_5']:.6f}",
+        }
+        for token, value in replacements.items():
+            text = text.replace(token, value)
+        if "[[" in text:
+            raise ValueError("V2 methodology still contains an unfilled placeholder")
+        return text
+
     validation_decisions = metrics["validation_pair_decisions"]
     per_country = metrics["per_country"]
     country_summary = "; ".join(
@@ -75,9 +100,9 @@ def render_documentation(metrics: dict[str, Any]) -> str:
     return text
 
 
-def validate_candidate_file(path: Path, test_source1: Path, cap_per_source: int) -> tuple[int, int]:
+def validate_candidate_file(path: Path, test_source1: Path, cap_per_source: int | None) -> tuple[int, int]:
     """Validate candidate rows in bounded memory without retaining candidate pairs."""
-    if cap_per_source < 1:
+    if cap_per_source is not None and cap_per_source < 1:
         raise ValueError("Candidate cap must be a positive integer")
 
     required: set[str] = set()
@@ -117,7 +142,7 @@ def validate_candidate_file(path: Path, test_source1: Path, cap_per_source: int)
             s3_count = sum(entity_id.startswith("S3-") for entity_id in ids)
             if s2_count + s3_count != len(ids):
                 raise ValueError(f"Candidate ID has an invalid source prefix at line {line_number}")
-            if s2_count > cap_per_source or s3_count > cap_per_source:
+            if cap_per_source is not None and (s2_count > cap_per_source or s3_count > cap_per_source):
                 raise ValueError(
                     f"Candidate cap exceeded at line {line_number}: "
                     f"S2={s2_count}, S3={s3_count}, cap={cap_per_source}"
@@ -129,10 +154,8 @@ def validate_candidate_file(path: Path, test_source1: Path, cap_per_source: int)
         examples = ", ".join(sorted(required)[:5])
         raise ValueError(f"Candidate file is missing {len(required):,} Source 1 rows; e.g. {examples}")
 
-    print(
-        f"  candidate_pairs.tsv: {rows:,} rows ({empty_rows:,} empty); "
-        f"at most {cap_per_source} candidates per target source."
-    )
+    cap_summary = f"at most {cap_per_source} candidates per target source" if cap_per_source else "unique, valid source IDs"
+    print(f"  candidate_pairs.tsv: {rows:,} rows ({empty_rows:,} empty); {cap_summary}.")
     return rows, empty_rows
 
 
@@ -140,6 +163,7 @@ def main() -> int:
     matching = OUTPUT_ROOT / "matching_results.tsv"
     candidates = OUTPUT_ROOT / "candidate_pairs.tsv"
     metrics_path = OUTPUT_ROOT / "metrics.json"
+    test_metrics_path = OUTPUT_ROOT / "test_metrics.json"
     required = [matching, candidates, metrics_path, DOCUMENTATION]
     missing = [path for path in required if not path.is_file()]
     if missing:
@@ -159,15 +183,19 @@ def main() -> int:
         check=True,
     )
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    if "training_oof_operating_point" in metrics and not test_metrics_path.is_file():
+        raise FileNotFoundError(f"Required V2 metric file is missing: {test_metrics_path}")
+    test_metrics = json.loads(test_metrics_path.read_text(encoding="utf-8")) if test_metrics_path.is_file() else {}
+    cap = None if "training_oof_operating_point" in metrics else int(metrics["selected_cap_per_source"])
     validate_candidate_file(
         candidates,
         STUDENT_ROOT / "dataset" / "test" / "test_source1.tsv",
-        int(metrics["selected_cap_per_source"]),
+        cap,
     )
 
     temporary_archive = ARCHIVE.with_suffix(".zip.tmp")
     try:
-        documentation = render_documentation(metrics)
+        documentation = render_documentation(metrics, test_metrics)
         with zipfile.ZipFile(
             temporary_archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
         ) as archive:
