@@ -99,8 +99,6 @@ if ($Phase -in @('features','test')) {
 }
 else {
     $singleRegion = 'us-east-1'
-    $instanceType = if ($Phase -eq 'fit') { 'r6i.2xlarge' } else { 'r6i.xlarge' }
-    $instanceVcpu = if ($Phase -eq 'fit') { 8 } else { 4 }
     $quota = [double]((Invoke-Aws @('service-quotas','get-service-quota','--service-code','ec2',
         '--quota-code','L-1216C47A','--region',$singleRegion,'--query','Quota.Value','--output','text') | Out-String).Trim())
     $runningInstances = (Invoke-Aws @('ec2','describe-instances','--region',$singleRegion,
@@ -114,8 +112,34 @@ else {
             $usedVcpu += [double]$vcpuText
         }
     }
-    if (($quota - $usedVcpu) -lt $instanceVcpu) {
-        throw "Insufficient available vCPU quota in $singleRegion for $instanceType."
+
+    if ($Phase -eq 'fit') {
+        $fitOfferings = (Invoke-Aws @('ec2','describe-instance-type-offerings','--region',$singleRegion,
+            '--location-type','availability-zone','--filters','Name=instance-type,Values=r6i.4xlarge,r6i.2xlarge',
+            '--query','InstanceTypeOfferings[].InstanceType','--output','text') | Out-String).Trim() -split '\s+'
+        $instanceType = $null
+        $instanceVcpu = 0
+        foreach ($candidate in @(
+            [pscustomobject]@{type='r6i.4xlarge';vcpu=16},
+            [pscustomobject]@{type='r6i.2xlarge';vcpu=8}
+        )) {
+            if (($candidate.type -in $fitOfferings) -and (($quota - $usedVcpu) -ge $candidate.vcpu)) {
+                $instanceType = $candidate.type
+                $instanceVcpu = $candidate.vcpu
+                break
+            }
+        }
+        if (-not $instanceType) {
+            throw "Insufficient available vCPU quota or instance offering in $singleRegion for the fit stage."
+        }
+        Write-Output "Selected fit instance $instanceType with $instanceVcpu vCPUs (quota $quota, currently used $usedVcpu)."
+    }
+    else {
+        $instanceType = 'r6i.xlarge'
+        $instanceVcpu = 4
+        if (($quota - $usedVcpu) -lt $instanceVcpu) {
+            throw "Insufficient available vCPU quota in $singleRegion for $instanceType."
+        }
     }
     $instances = @([pscustomobject]@{region=$singleRegion; shard=0; type=$instanceType; vcpu=$instanceVcpu})
 }
@@ -225,8 +249,10 @@ foreach ($region in ($instances.region | Select-Object -Unique)) {
     $vpc = (Invoke-Aws @('ec2','describe-vpcs','--region',$region,'--filters','Name=is-default,Values=true',
         '--query','Vpcs[0].VpcId','--output','text') | Out-String).Trim()
     if (-not $vpc -or $vpc -eq 'None') { throw "No default VPC is available in $region." }
+    $typesInRegion = (@($instances | Where-Object { $_.region -eq $region } |
+        Select-Object -ExpandProperty type -Unique) -join ',')
     $offerings = (Invoke-Aws @('ec2','describe-instance-type-offerings','--region',$region,'--location-type','availability-zone',
-        '--filters','Name=instance-type,Values=r6i.xlarge,r6i.2xlarge','--query','InstanceTypeOfferings[].Location','--output','text') | Out-String).Trim() -split '\s+'
+        '--filters',"Name=instance-type,Values=$typesInRegion",'--query','InstanceTypeOfferings[].Location','--output','text') | Out-String).Trim() -split '\s+'
     $subnetRows = (Invoke-Aws @('ec2','describe-subnets','--region',$region,'--filters',"Name=vpc-id,Values=$vpc",'Name=default-for-az,Values=true',
         '--query','Subnets[].{Id:SubnetId,Az:AvailabilityZone}','--output','json') | Out-String) | ConvertFrom-Json
     $subnet = $subnetRows | Where-Object { $_.Az -in $offerings } | Select-Object -First 1
