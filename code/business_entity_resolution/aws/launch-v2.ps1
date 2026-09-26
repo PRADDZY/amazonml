@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('probe')][string]$Mode = 'probe',
+    [ValidateSet('probe','full')][string]$Mode = 'probe',
     [ValidateRange(1, 12)][int]$MaxHours = 3,
     [ValidateRange(1, 10000)][int]$SampleModulus = 500,
     [switch]$StageOnly
@@ -35,7 +35,7 @@ $archive = Join-Path $stage 'code.zip'
 Compress-Archive -Path (Join-Path $packageRoot 'src'),(Join-Path $packageRoot 'requirements-v2.txt') -DestinationPath $archive
 $null = Invoke-Aws @('s3','cp',$archive,$codeUri,'--region',$region,'--only-show-errors')
 $lifetimeMinutes = $MaxHours * 60
-$jobSeconds = $MaxHours * 3600 - 600
+$jobSeconds = $MaxHours * 3600 - 900
 $bootstrap = @'
 #!/bin/bash
 set -Eeuo pipefail
@@ -81,14 +81,23 @@ status SMOKE_TEST
 status DOWNLOADING_DATA
 aws s3 sync "$BUCKET_URI/input/train/" /opt/devcore-v2/data/train/ --region us-east-1 --only-show-errors
 aws s3 sync "$CACHE_URI/" /opt/devcore-v2/index/ --region us-east-1 --only-show-errors
-status RUNNING_PROBE
-timeout __SECONDS__ /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_probe.py \
- --train-dir /opt/devcore-v2/data/train --index-dir /opt/devcore-v2/index \
- --output-dir /opt/devcore-v2/results --workers 8 --sample-modulus __MODULUS__
+if [ '__MODE__' = 'probe' ]; then
+  status RUNNING_PROBE
+  timeout __SECONDS__ /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_probe.py \
+   --train-dir /opt/devcore-v2/data/train --index-dir /opt/devcore-v2/index \
+   --output-dir /opt/devcore-v2/results --workers 8 --sample-modulus __MODULUS__
+else
+  mkdir -p /opt/devcore-v2/data/test
+  aws s3 sync "$BUCKET_URI/input/test/" /opt/devcore-v2/data/test/ --region us-east-1 --only-show-errors
+  status RUNNING_TRAIN_EVAL_AND_TEST
+  timeout __SECONDS__ /opt/devcore-v2/venv/bin/python /opt/devcore-v2/code/src/v2_pipeline.py \
+   --train-dir /opt/devcore-v2/data/train --test-dir /opt/devcore-v2/data/test \
+   --index-dir /opt/devcore-v2/index --output-dir /opt/devcore-v2/results --workers 8
+fi
 status SAVING_INDEX_CACHE
 timeout 480 aws s3 sync /opt/devcore-v2/index/ "$CACHE_URI/" --region us-east-1 --only-show-errors
 '@
-$bootstrap = $bootstrap.Replace('__RUN__',$runUri).Replace('__BUCKET__',$bucketUri).Replace('__CODE__',$codeUri).Replace('__CACHE__',$cacheUri).Replace('__MINUTES__',[string]$lifetimeMinutes).Replace('__SECONDS__',[string]$jobSeconds).Replace('__MODULUS__',[string]$SampleModulus)
+$bootstrap = $bootstrap.Replace('__RUN__',$runUri).Replace('__BUCKET__',$bucketUri).Replace('__CODE__',$codeUri).Replace('__CACHE__',$cacheUri).Replace('__MODE__',$Mode).Replace('__MINUTES__',[string]$lifetimeMinutes).Replace('__SECONDS__',[string]$jobSeconds).Replace('__MODULUS__',[string]$SampleModulus)
 $bootstrapPath = Join-Path $stage 'bootstrap.sh'
 [IO.File]::WriteAllText($bootstrapPath,($bootstrap -replace "`r`n","`n"),[Text.UTF8Encoding]::new($false))
 if ($StageOnly) { Write-Output "Staged: $stage"; exit 0 }
@@ -104,7 +113,8 @@ $group = (Invoke-Aws @('ec2','describe-security-groups','--region',$region,'--fi
 $ami = (Invoke-Aws @('ssm','get-parameter','--region',$region,'--name','/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64','--query','Parameter.Value','--output','text') | Out-String).Trim()
 if ($subnet -eq 'None' -or $group -eq 'None' -or $ami -eq 'None') { throw 'AWS launch prerequisites are missing' }
 $blocks = Join-Path $stage 'blocks.json'
-Write-Json $blocks @(@{DeviceName='/dev/xvda'; Ebs=@{VolumeSize=100; VolumeType='gp3'; Encrypted=$true; DeleteOnTermination=$true}})
+$volumeSize = if ($Mode -eq 'full') { 200 } else { 100 }
+Write-Json $blocks @(@{DeviceName='/dev/xvda'; Ebs=@{VolumeSize=$volumeSize; VolumeType='gp3'; Encrypted=$true; DeleteOnTermination=$true}})
 $tags = Join-Path $stage 'tags.json'
 Write-Json $tags @(@{ResourceType='instance';Tags=@(@{Key='Name';Value="devcore-v2-$Mode-$label"},@{Key='Team';Value='DevCore'})},@{ResourceType='volume';Tags=@(@{Key='Team';Value='DevCore'})})
 $instance = (Invoke-Aws @('ec2','run-instances','--region',$region,'--image-id',$ami,'--instance-type','r6i.2xlarge','--count','1','--subnet-id',$subnet,'--security-group-ids',$group,'--associate-public-ip-address','--iam-instance-profile','Name=DevCoreEntityResolutionEc2Profile','--user-data',"file://$bootstrapPath",'--block-device-mappings',"file://$blocks",'--tag-specifications',"file://$tags",'--metadata-options','HttpTokens=required,HttpEndpoint=enabled,HttpPutResponseHopLimit=1','--instance-initiated-shutdown-behavior','terminate','--output','json') | Out-String) | ConvertFrom-Json

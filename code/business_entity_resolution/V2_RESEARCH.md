@@ -9,21 +9,28 @@ trigrams with more than 16 postings, sampled only four name trigrams and three
 address trigrams, and discarded all non-ASCII letters. These restrictions make
 noisy names and Indian scripts especially vulnerable.
 
-## Replacement and evidence
+## Replacement architecture
 
-1. Preserve Unicode and add deterministic transliteration. Keep every trigram.
-2. Index deduplicated Source 1 by country; query targets against this smaller
-   reference using BM25 name, address, and combined views. Export the inverse
-   mapping as Source 1 candidate lists. No Cartesian product is materialized.
-3. Measure candidate recall at several k values against the complete reference
-   corpus before training. A sampled-positive recall audit is explicitly not an
-   end-to-end macro F0.5 estimate.
-4. Fit a richer pair classifier using hard negatives, then validate target
-   exclusivity and score margins. Hold out complete Source 1 groups; do not put
-   IDs or fold identifiers into model features.
-5. Select the smallest candidate set that preserves measured matching quality.
-   The exported candidate file must include exactly the pairs sent to the final
-   matcher, before the final decision threshold.
+1. Preserve native scripts, fold Latin accents, and add deterministic ASCII
+   transliteration. Index raw and legal-suffix-cleaned name/address views, word
+   terms, and character trigrams in separate country indexes.
+2. Query each target record against the smaller, deduplicated Source 1 index
+   with flat BM25 term unions for joint, name, and address evidence. Reciprocal
+   rank fusion makes at most eight Source 1 candidates per target; the inverse
+   candidate mapping is written per Source 1 entity. No Cartesian product is
+   materialized.
+3. Audit retrieval against the full Source 1 index, then build candidate-only
+   pair features for names, transliterations, addresses, house numbers, postal
+   codes, country/source, and retrieval ranks.
+4. Fit CPU LightGBM models on AWS. Five held-out folds are keyed by complete
+   Source 1 entity groups. Training rows exclude both the held-out query group
+   and held-out candidate reference group. Target and reference IDs select folds
+   only and never enter model features.
+5. For every held-out target, select at most one reference candidate. Tune the
+   candidate cap and confidence threshold against the exact per-Source-1 macro
+   F0.5, including entities with no true or predicted matches. The submission
+   candidate file contains the full pre-threshold candidate set seen by the
+   matcher; every predicted match must be in that set.
 
 References informing the design:
 
@@ -37,9 +44,12 @@ References informing the design:
   search, with result counting disabled to permit efficient retrieval.
 
 The first experiment is a CPU retrieval audit, not an LLM deployment. All real
-data indexing, training, and inference run on AWS. Local work is source editing,
-small unit tests, document inspection, and artifact packaging. No external business
-identities, addresses, labels, competitor models, or predictions enter the pipeline.
+data indexing, training, and inference run on AWS. No external business identities,
+addresses, labels, competitor models, or predictions enter the pipeline. The first
+worker exposed an archive extraction path error before it read challenge data; the
+bootstrap now uses explicit ZIP extraction and verifies the expected source files.
+The corrected retrieval pilot is running. It has not yet supplied new recall or
+score measurements, so the 0.990788 leaderboard result remains an unverified target.
 
 The user authorized up to $100 for this improvement effort on September 26,
 replacing the earlier $90 ceiling. Each worker has an independent shutdown timer,
