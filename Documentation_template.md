@@ -31,9 +31,9 @@ Source 1 records are indexed separately by country with Tantivy. For each target
 record, three BM25 queries retrieve bounded top-k candidates using combined name
 and address evidence, name evidence, and address evidence. Each query uses raw and
 cleaned text, transliteration, word tokens, and character trigrams. Reciprocal rank
-fusion merges the three ranked lists and produces a bounded candidate list. The
-candidate cap is selected during cross-fitting to retain a small set while
-preserving measured macro F0.5.
+fusion merges the three ranked lists, each with up to 24 results, then selects a
+per-target cap from 1, 2, 3, 4, 6, or 8 candidates. The cap is selected during
+cross-fitting to retain a small set while preserving measured macro F0.5.
 
 `candidate_pairs.tsv` records the capped set presented to the pair classifier,
 before its confidence threshold selects final matches. Candidate lists are
