@@ -39,14 +39,13 @@ cross-fitting to retain a small set while preserving measured macro F0.5.
 before its confidence threshold selects final matches. Candidate lists are
 deduplicated per Source 1 entity and include empty lists.
 
-**Selected candidates per target:** To be filled from `oof_metrics.json`.
+**Selected candidates per target:** [[SELECTED_CANDIDATES_PER_TARGET]]
 
-**Test candidate-pair count:** To be filled from `test_metrics.json`.
+**Test candidate-pair count:** [[TEST_CANDIDATE_PAIRS]]
 
-**Mean / median / p95 / p99 / maximum candidates per Source 1:** To be filled
-from `test_metrics.json`.
+**Mean / median / p95 / p99 / maximum candidates per Source 1:** [[CANDIDATE_DISTRIBUTION]]
 
-**Same-country search-space reduction:** To be filled from `test_metrics.json`.
+**Same-country search-space reduction:** [[CANDIDATE_REDUCTION]]
 
 ## Pair model and validation
 
@@ -64,13 +63,13 @@ entities with no true or predicted links. Each target produces at most one final
 Source 1 match. The final classifier is fit on all training candidate pairs after
 the operating point is selected.
 
-**Selected candidate cap:** To be filled from `oof_metrics.json`.
+**Selected candidate cap:** [[SELECTED_CAP]]
 
-**Selected confidence threshold:** To be filled from `oof_metrics.json`.
+**Selected confidence threshold:** [[SELECTED_THRESHOLD]]
 
-**Cross-fit calibration macro F0.5:** To be filled from `oof_metrics.json`.
+**Cross-fit calibration macro F0.5:** [[CALIBRATION_F05]]
 
-**Reserved-fold audit macro F0.5:** To be filled from `oof_metrics.json`.
+**Reserved-fold audit macro F0.5:** [[AUDIT_F05]]
 
 ## AWS execution and artifacts
 
