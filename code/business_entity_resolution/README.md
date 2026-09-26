@@ -28,7 +28,27 @@ above-threshold matches. Empty lists are retained in both files. The Spark job w
 partitioned outputs and metrics to S3; `materialize_output.py` streams the parts into
 flat UTF-8 TSV files and `output/metrics.json`.
 
-## AWS run
+## Higher-recall v2 path
+
+`aws/launch-v2.ps1 -Mode probe` audits multilingual BM25 retrieval against the
+complete training Source 1 index. `-Mode full` runs the cross-fitted LightGBM
+pipeline on AWS, chooses the target candidate cap and score threshold using
+macro F0.5, then writes both final TSVs. The reverse index is country-scoped;
+each target queries bounded top-k Source 1 candidates, so the search does not
+form a Cartesian product. The fifth entity fold remains an untouched operating
+point audit. Worker status, logs, metrics, and submission files are saved under
+the run's S3 `output/v2/` prefix; the worker shuts down automatically.
+
+Run the new full path from the workspace root after the probe finishes:
+
+```powershell
+.\code\business_entity_resolution\aws\launch-v2.ps1 -Mode full -MaxHours 12
+```
+
+The older Spark implementation below remains the baseline path. The v2 run is
+promoted only after its held-out audit and official submission validation pass.
+
+## Baseline Spark run
 
 The launcher uses AWS CLI only and runs in `us-east-1`, beside the challenge S3
 bucket. Full runs use one `r6i.2xlarge` EC2 instance with eight Spark local worker
