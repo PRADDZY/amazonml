@@ -16,7 +16,12 @@ PACKAGE_ROOT = WORKSPACE / "code" / "business_entity_resolution"
 OUTPUT_ROOT = WORKSPACE / "output"
 ARCHIVE = WORKSPACE / "DevCore_submission.zip"
 DOCUMENTATION = WORKSPACE / "Documentation_template.md"
-EXCLUDED_FILES = {"sagemaker-trust-policy.json", "run-glue.ps1", "package-submission.ps1"}
+EXCLUDED_FILES = {
+    "sagemaker-trust-policy.json",
+    "run-aws.ps1",
+    "run-glue.ps1",
+    "package-submission.ps1",
+}
 
 
 def render_documentation(metrics: dict[str, Any]) -> str:
