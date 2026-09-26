@@ -1,7 +1,7 @@
 # Amazon ML Challenge 2026: Business Entity Resolution
 
 **Team Name:** DevCore  
-**Team Members:** To be confirmed by the team  
+**Team Members:** Pratik Daithankar  
 **Submission Date:** 2026-09-26
 
 ---
