@@ -41,10 +41,9 @@ def main():
     started = time.monotonic()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     source1 = args.train_dir / "train_source1.tsv"
-    sample, all_rids = {}, {}
+    sample = {}
     countries = Counter()
     for rid, row in enumerate(rows(source1)):
-        all_rids[row["entity_id"]] = rid
         countries[row["country"]] += 1
         if entity_partition(row["entity_id"], args.sample_modulus) == 0:
             sample[row["entity_id"]] = (rid, row)

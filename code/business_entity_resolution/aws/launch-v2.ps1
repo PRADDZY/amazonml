@@ -34,8 +34,8 @@ $cacheUri = "$bucketUri/output/v2/cache/unicode-bm25-v2/train"
 $archive = Join-Path $stage 'code.zip'
 Compress-Archive -Path (Join-Path $packageRoot 'src'),(Join-Path $packageRoot 'requirements-v2.txt') -DestinationPath $archive
 $null = Invoke-Aws @('s3','cp',$archive,$codeUri,'--region',$region,'--only-show-errors')
-$lifetimeMinutes = $MaxHours * 60
-$jobSeconds = $MaxHours * 3600 - 900
+$lifetimeMinutes = $MaxHours * 60 + 30
+$jobSeconds = $MaxHours * 3600
 $bootstrap = @'
 #!/bin/bash
 set -Eeuo pipefail
