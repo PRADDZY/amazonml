@@ -287,8 +287,18 @@ def _fit_oof(feature_path: Path, target_path: Path, references: list[Record], ow
         "bagging_seed": 20260928, "deterministic": True,
     }
     for validation_fold in range(FOLDS):
-        train_mask = (fold != validation_fold) & (rid_fold != validation_fold) & (rank <= max(CAPS))
-        valid_mask = rid_fold == validation_fold
+        # Hold out every candidate for a target together. Scoring candidate rows
+        # in separate folds gives one target probabilities from several models,
+        # unlike inference where a single model ranks the entire candidate set.
+        # The final reference fold stays out of every training split so its
+        # per-entity audit remains untouched, including its negative examples.
+        train_mask = (
+            (fold != validation_fold)
+            & (rid_fold != validation_fold)
+            & (rid_fold != FOLDS - 1)
+            & (rank <= max(CAPS))
+        )
+        valid_mask = fold == validation_fold
         if len(np.unique(label[train_mask])) < 2 or not valid_mask.any():
             raise RuntimeError(f"Fold {validation_fold} lacks both classes or validation rows")
         train_set = lgb.Dataset(X[train_mask], label=y[train_mask], feature_name=list(FEATURE_NAMES))
