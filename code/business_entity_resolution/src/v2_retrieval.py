@@ -90,12 +90,13 @@ class Retriever:
         self.searchers = {}
 
     def retrieve(self, record: Record, k: int = 12) -> dict[int, dict]:
+        """Return bounded same-country candidates, or none for a new country."""
         import tantivy
         country = record.country
         if country not in self.indexes:
             path = country_dir(self.root, country)
             if not path.exists():
-                raise ValueError(f"No reference index for country {country!r}")
+                return {}
             self.indexes[country] = tantivy.Index.open(str(path))
             tokenizer(self.indexes[country])
             self.searchers[country] = self.indexes[country].searcher()
