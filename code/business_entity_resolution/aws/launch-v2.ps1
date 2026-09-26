@@ -1,13 +1,15 @@
 [CmdletBinding()]
 param(
     [ValidateSet('probe','full')][string]$Mode = 'probe',
-    [ValidateRange(1, 12)][int]$MaxHours = 3,
+    [ValidateRange(1, 20)][int]$MaxHours = 3,
     [ValidateRange(1, 10000)][int]$SampleModulus = 500,
     [switch]$StageOnly
 )
 $ErrorActionPreference = 'Stop'
 $env:AWS_SDK_UA_APP_ID = 'AWSSkill-SageMaker'
 $region = 'us-east-1'
+$instanceType = if ($Mode -eq 'full') { 'r6i.16xlarge' } else { 'r6i.2xlarge' }
+$workers = if ($Mode -eq 'full') { 64 } else { 8 }
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $packageRoot = Join-Path $workspace 'code\business_entity_resolution'
 $label = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -118,12 +120,12 @@ else
   status RUNNING_TRAIN_EVAL_AND_TEST
   timeout __SECONDS__ python3.11 /opt/devcore-v2/code/src/v2_pipeline.py \
    --train-dir /opt/devcore-v2/data/train --test-dir /opt/devcore-v2/data/test \
-   --index-dir /opt/devcore-v2/index --output-dir /opt/devcore-v2/results --workers 8
+   --index-dir /opt/devcore-v2/index --output-dir /opt/devcore-v2/results --workers __WORKERS__
 fi
 status SAVING_INDEX_CACHE
 timeout 480 aws s3 sync /opt/devcore-v2/index/ "$CACHE_URI/" --region us-east-1 --only-show-errors
 '@
-$bootstrap = $bootstrap.Replace('__RUN__',$runUri).Replace('__BUCKET__',$bucketUri).Replace('__CODE__',$codeUri).Replace('__CACHE__',$cacheUri).Replace('__MODE__',$Mode).Replace('__MINUTES__',[string]$lifetimeMinutes).Replace('__SECONDS__',[string]$jobSeconds).Replace('__MODULUS__',[string]$SampleModulus)
+$bootstrap = $bootstrap.Replace('__RUN__',$runUri).Replace('__BUCKET__',$bucketUri).Replace('__CODE__',$codeUri).Replace('__CACHE__',$cacheUri).Replace('__MODE__',$Mode).Replace('__MINUTES__',[string]$lifetimeMinutes).Replace('__SECONDS__',[string]$jobSeconds).Replace('__MODULUS__',[string]$SampleModulus).Replace('__WORKERS__',[string]$workers)
 $bootstrapPath = Join-Path $stage 'bootstrap.sh'
 [IO.File]::WriteAllText($bootstrapPath,($bootstrap -replace "`r`n","`n"),[Text.UTF8Encoding]::new($false))
 if ($StageOnly) { Write-Output "Staged: $stage"; exit 0 }
@@ -143,8 +145,8 @@ $volumeSize = if ($Mode -eq 'full') { 200 } else { 100 }
 Write-Json $blocks @(@{DeviceName='/dev/xvda'; Ebs=@{VolumeSize=$volumeSize; VolumeType='gp3'; Encrypted=$true; DeleteOnTermination=$true}})
 $tags = Join-Path $stage 'tags.json'
 Write-Json $tags @(@{ResourceType='instance';Tags=@(@{Key='Name';Value="devcore-v2-$Mode-$label"},@{Key='Team';Value='DevCore'})},@{ResourceType='volume';Tags=@(@{Key='Team';Value='DevCore'})})
-$instance = (Invoke-Aws @('ec2','run-instances','--region',$region,'--image-id',$ami,'--instance-type','r6i.2xlarge','--count','1','--subnet-id',$subnet,'--security-group-ids',$group,'--associate-public-ip-address','--iam-instance-profile','Name=DevCoreEntityResolutionEc2Profile','--user-data',"file://$bootstrapPath",'--block-device-mappings',"file://$blocks",'--tag-specifications',"file://$tags",'--metadata-options','HttpTokens=required,HttpEndpoint=enabled,HttpPutResponseHopLimit=1','--instance-initiated-shutdown-behavior','terminate','--output','json') | Out-String) | ConvertFrom-Json
-$run = @{instance_id=$instance.Instances[0].InstanceId; run_uri=$runUri; cache_uri=$cacheUri; mode=$Mode; max_hours=$MaxHours; started_utc=(Get-Date).ToUniversalTime().ToString('o'); poll_interval_minutes=15}
+$instance = (Invoke-Aws @('ec2','run-instances','--region',$region,'--image-id',$ami,'--instance-type',$instanceType,'--count','1','--subnet-id',$subnet,'--security-group-ids',$group,'--associate-public-ip-address','--iam-instance-profile','Name=DevCoreEntityResolutionEc2Profile','--user-data',"file://$bootstrapPath",'--block-device-mappings',"file://$blocks",'--tag-specifications',"file://$tags",'--metadata-options','HttpTokens=required,HttpEndpoint=enabled,HttpPutResponseHopLimit=1','--instance-initiated-shutdown-behavior','terminate','--output','json') | Out-String) | ConvertFrom-Json
+$run = @{instance_id=$instance.Instances[0].InstanceId; instance_type=$instanceType; workers=$workers; run_uri=$runUri; cache_uri=$cacheUri; mode=$Mode; max_hours=$MaxHours; started_utc=(Get-Date).ToUniversalTime().ToString('o'); poll_interval_minutes=15}
 Write-Json (Join-Path $stage 'run.json') $run
 Write-Json (Join-Path $workspace 'output\v2\latest-run.json') $run
 $run | ConvertTo-Json

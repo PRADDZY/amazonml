@@ -278,11 +278,12 @@ def _fit_oof(feature_path: Path, target_path: Path, references: list[Record], ow
     y = label.astype(np.float32, copy=False)
     oof = np.full((X.shape[0],), np.nan, dtype=np.float32)
     fold_iterations = []
+    training_threads = min(32, os.cpu_count() or 8)
     params = {
         "objective": "binary", "metric": "binary_logloss", "learning_rate": 0.05,
         "num_leaves": 31, "max_depth": -1, "min_data_in_leaf": 80,
         "feature_fraction": 0.9, "bagging_fraction": 0.85, "bagging_freq": 1,
-        "lambda_l2": 2.0, "max_bin": 63, "verbosity": -1, "num_threads": 8,
+        "lambda_l2": 2.0, "max_bin": 63, "verbosity": -1, "num_threads": training_threads,
         "seed": 20260926, "feature_fraction_seed": 20260927,
         "bagging_seed": 20260928, "deterministic": True,
     }
@@ -307,7 +308,7 @@ def _fit_oof(feature_path: Path, target_path: Path, references: list[Record], ow
             params, train_set, num_boost_round=900, valid_sets=[valid_set],
             valid_names=["heldout"], callbacks=[lgb.early_stopping(60, verbose=False)],
         )
-        oof[valid_mask] = model.predict(X[valid_mask], num_threads=8).astype(np.float32)
+        oof[valid_mask] = model.predict(X[valid_mask], num_threads=training_threads).astype(np.float32)
         fold_iterations.append(int(model.best_iteration or 900))
         LOG.info("Cross-fit fold %s finished at iteration %s", validation_fold, fold_iterations[-1])
         del train_set, valid_set, model
@@ -493,7 +494,7 @@ def main():
     )
     LOG.info("Loaded %s Source 1 references and %s labeled targets; truth group sizes=%s",
              len(train_references), len(owners), truth_group_sizes)
-    manifest = build_index(source1_train, args.index_dir)
+    manifest = build_index(source1_train, args.index_dir, threads=min(16, args.workers))
     feature_path, target_path, data_metrics = _write_training_features(
         args.train_dir, args.index_dir, args.output_dir, owners, train_references, args.workers,
     )
@@ -510,7 +511,7 @@ def main():
         raise RuntimeError("Test Source 1 is empty")
     # Test Source 1 can use a different corpus; build an isolated index and never mix IDs across splits.
     test_index = args.index_dir.parent / "test-index"
-    test_manifest = build_index(test_source1, test_index)
+    test_manifest = build_index(test_source1, test_index, threads=min(16, args.workers))
     test_candidates_total, candidate_count, matches, possible_pairs = _predict_test(
         args.test_dir, test_index, args.output_dir, test_references, model_path, operating, args.workers,
     )

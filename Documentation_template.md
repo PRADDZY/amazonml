@@ -73,8 +73,8 @@ the operating point is selected.
 
 ## AWS execution and artifacts
 
-The full workflow runs on one `r6i.2xlarge` Amazon Linux 2023 EC2 worker in
-`us-east-1`, with eight CPU workers and an encrypted 200 GB gp3 root volume. AWS
+The full workflow runs on one `r6i.16xlarge` Amazon Linux 2023 EC2 worker in
+`us-east-1`, with 64 CPU workers and an encrypted 200 GB gp3 root volume. AWS
 CLI stages code and data in S3, launches the worker, and retrieves its logs,
 metrics, and output files. A finite process timeout and independent instance
 shutdown limit bound the run. There is no hosted endpoint.

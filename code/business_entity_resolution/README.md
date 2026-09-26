@@ -31,8 +31,9 @@ flat UTF-8 TSV files and `output/metrics.json`.
 ## Higher-recall v2 path
 
 `aws/launch-v2.ps1 -Mode probe` audits multilingual BM25 retrieval against the
-complete training Source 1 index. `-Mode full` runs the cross-fitted LightGBM
-pipeline on AWS, chooses the target candidate cap and score threshold using
+complete training Source 1 index. `-Mode full` uses 64 CPU workers on an
+`r6i.16xlarge` EC2 instance to run the cross-fitted LightGBM pipeline on AWS,
+chooses the target candidate cap and score threshold using
 macro F0.5, then writes both final TSVs. The reverse index is country-scoped;
 each target queries bounded top-k Source 1 candidates, so the search does not
 form a Cartesian product. The fifth entity fold remains an untouched operating
@@ -42,7 +43,7 @@ the run's S3 `output/v2/` prefix; the worker shuts down automatically.
 Run the new full path from the workspace root after the probe finishes:
 
 ```powershell
-.\code\business_entity_resolution\aws\launch-v2.ps1 -Mode full -MaxHours 12
+.\code\business_entity_resolution\aws\launch-v2.ps1 -Mode full -MaxHours 20
 ```
 
 After a successful full run, download its files and metrics into a versioned
