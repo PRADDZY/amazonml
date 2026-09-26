@@ -24,18 +24,18 @@ def main():
         root = Path(temporary)
         sharding = root / "sharding"
         sharding.mkdir()
-        columns = ("entity_id", "matched_entity_ids")
+        shard_columns = ("entity_id", "matched_entity_ids")
         source_ids = [f"S2-{index}" for index in range(30)] + [f"S3-{index}" for index in range(30)]
         for source in (2, 3):
             path = sharding / f"train_source{source}.tsv"
             with path.open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.writer(stream, delimiter="\t")
-                writer.writerow(columns)
+                writer.writerow(shard_columns)
                 writer.writerows((entity_id, "") for entity_id in source_ids if entity_id.startswith(f"S{source}-"))
             test_path = sharding / f"test_source{source}.tsv"
             with test_path.open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.writer(stream, delimiter="\t")
-                writer.writerow(columns)
+                writer.writerow(shard_columns)
                 writer.writerows((entity_id, "") for entity_id in source_ids if entity_id.startswith(f"S{source}-"))
         owners = {entity_id: index % 4 for index, entity_id in enumerate(source_ids[:12])}
         v2_pipeline._REFERENCE_FOLDS = numpy.asarray([0, 1, 2, 3], dtype=numpy.int8)
