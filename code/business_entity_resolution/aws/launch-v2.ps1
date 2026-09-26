@@ -93,8 +93,8 @@ $bootstrapPath = Join-Path $stage 'bootstrap.sh'
 [IO.File]::WriteAllText($bootstrapPath,($bootstrap -replace "`r`n","`n"),[Text.UTF8Encoding]::new($false))
 if ($StageOnly) { Write-Output "Staged: $stage"; exit 0 }
 
-$active = (Invoke-Aws @('ec2','describe-instances','--region',$region,'--filters','Name=instance-state-name,Values=running,pending','--query','length(Reservations[].Instances[])','--output','text') | Out-String).Trim()
-if ([int]$active -gt 0) { throw 'An EC2 instance is already running. Inspect it before starting another.' }
+$active = (Invoke-Aws @('ec2','describe-instances','--region',$region,'--filters','Name=instance-state-name,Values=running,pending','Name=tag:Name,Values=devcore-v2-*','--query','length(Reservations[].Instances[])','--output','text') | Out-String).Trim()
+if ([int]$active -gt 0) { throw 'A DevCore v2 worker is already running. Inspect it before starting another.' }
 $policyPath = Join-Path $stage 'role-policy.json'
 $policy = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ec2-role-policy.json') -Raw).Replace('ACCOUNT',$account)
 [IO.File]::WriteAllText($policyPath,$policy,[Text.UTF8Encoding]::new($false))
