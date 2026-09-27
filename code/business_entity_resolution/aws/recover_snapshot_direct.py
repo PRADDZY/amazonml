@@ -18,8 +18,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO
 
@@ -35,11 +37,36 @@ DEFAULT_FILES = (
 )
 
 
-def aws_json(args: list[str]) -> dict:
-    env = os.environ.copy()
-    env["AWS_PAGER"] = ""
+def aws_json(args: list[str], env: dict[str, str] | None = None) -> dict:
+    command_env = (env or os.environ).copy()
+    command_env["AWS_PAGER"] = ""
     result = subprocess.run(
         ["aws", *args, "--output", "json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=command_env,
+        timeout=180,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    return json.loads(result.stdout)
+
+
+def export_login_credentials() -> tuple[dict[str, str], datetime]:
+    """Export one short-lived profile credential set for parallel CLI workers.
+
+    Without this, concurrent AWS CLI processes can all refresh the same local
+    login cache at once. Exporting serially keeps worker subprocesses off that
+    cache while still using AWS CLI for every AWS API operation.
+    """
+    env = os.environ.copy()
+    env["AWS_PAGER"] = ""
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
+        env.pop(name, None)
+    profile = env.get("AWS_PROFILE", "default")
+    result = subprocess.run(
+        ["aws", "configure", "export-credentials", "--profile", profile, "--format", "process"],
         check=False,
         capture_output=True,
         text=True,
@@ -47,8 +74,15 @@ def aws_json(args: list[str]) -> dict:
         timeout=180,
     )
     if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    return json.loads(result.stdout)
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Could not export AWS CLI credentials")
+    exported = json.loads(result.stdout)
+    credential_env = {
+        "AWS_ACCESS_KEY_ID": exported["AccessKeyId"],
+        "AWS_SECRET_ACCESS_KEY": exported["SecretAccessKey"],
+        "AWS_SESSION_TOKEN": exported["SessionToken"],
+    }
+    expiry = datetime.fromisoformat(exported["Expiration"].replace("Z", "+00:00"))
+    return credential_env, expiry
 
 
 class SnapshotStream(io.RawIOBase):
@@ -74,6 +108,10 @@ class SnapshotStream(io.RawIOBase):
         self.requests = 0
         self.downloaded_bytes = 0
         self.executor = ThreadPoolExecutor(max_workers=workers)
+        self.aws_env = os.environ.copy()
+        self.aws_env["AWS_PAGER"] = ""
+        self.credential_expiry = datetime.min.replace(tzinfo=timezone.utc)
+        self._refresh_credentials()
 
         # Listing once avoids one ListSnapshotBlocks API call for every block
         # read. The CLI follows NextToken pages automatically; block tokens
@@ -88,7 +126,8 @@ class SnapshotStream(io.RawIOBase):
                 self.snapshot_id,
                 "--max-results",
                 "10000",
-            ]
+            ],
+            env=self.aws_env,
         )
         if page.get("BlockSize") != BLOCK_SIZE:
             raise RuntimeError(f"Unexpected EBS block size: {page.get('BlockSize')}")
@@ -96,6 +135,18 @@ class SnapshotStream(io.RawIOBase):
             item["BlockIndex"]: item["BlockToken"] for item in page.get("Blocks", [])
         }
         print(f"Indexed {len(self.block_tokens):,} populated snapshot blocks.", flush=True)
+
+    def _refresh_credentials(self) -> None:
+        credential_env, expiry = export_login_credentials()
+        self.aws_env.update(credential_env)
+        self.credential_expiry = expiry
+        print(f"AWS CLI worker credentials valid until {expiry.astimezone(timezone.utc).isoformat()}.", flush=True)
+
+    def _ensure_credentials(self) -> None:
+        if datetime.now(timezone.utc) + timedelta(minutes=5) >= self.credential_expiry:
+            # Reads are issued in batches, so this refresh runs on the main
+            # thread between batches and never races the GetSnapshotBlock calls.
+            self._refresh_credentials()
 
     def readable(self) -> bool:
         return True
@@ -131,8 +182,7 @@ class SnapshotStream(io.RawIOBase):
             return bytes(BLOCK_SIZE)
 
         output_path = self.scratch / f"block-{index}.bin"
-        env = os.environ.copy()
-        env["AWS_PAGER"] = ""
+        env = self.aws_env.copy()
         result = subprocess.run(
             [
                 "aws",
@@ -191,6 +241,7 @@ class SnapshotStream(io.RawIOBase):
         size = min(size, self.size - self.position)
         if size == 0:
             return b""
+        self._ensure_credentials()
         first = self.position // BLOCK_SIZE
         last = (self.position + size - 1) // BLOCK_SIZE
         missing = [index for index in range(first, last + 1) if index not in self.cache]
@@ -256,7 +307,13 @@ def open_xfs(image: SnapshotStream):
     raise RuntimeError("Could not open XFS filesystem: " + " | ".join(errors))
 
 
-def extract(snapshot_id: str, region: str, output_dir: Path, paths: list[str]) -> int:
+def extract(
+    snapshot_id: str,
+    region: str,
+    output_dir: Path,
+    paths: list[str],
+    resume: bool = False,
+) -> int:
     from dissect.xfs.exceptions import FileNotFoundError as XFSFileNotFoundError
 
     snapshot = aws_json(
@@ -302,7 +359,21 @@ def extract(snapshot_id: str, region: str, output_dir: Path, paths: list[str]) -
                     file_obj: BinaryIO = entry.open()
                     destination = output_dir / Path(remote_path.lstrip("/"))
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    with file_obj, destination.open("wb") as output:
+                    offset = destination.stat().st_size if resume and destination.is_file() else 0
+                    if offset >= 8 and destination.suffix == ".parquet":
+                        with destination.open("rb") as existing:
+                            head = existing.read(4)
+                            existing.seek(-4, io.SEEK_END)
+                            tail = existing.read(4)
+                        if head == b"PAR1" and tail == b"PAR1":
+                            print(f"Already complete, skipping: {destination} ({offset:,} bytes)", flush=True)
+                            file_obj.close()
+                            found += 1
+                            continue
+                    if offset:
+                        file_obj.seek(offset, io.SEEK_SET)
+                        print(f"Resuming {remote_path} at byte {offset:,}.", flush=True)
+                    with file_obj, destination.open("ab" if offset else "wb") as output:
                         while True:
                             chunk = file_obj.read(8 * 1024 * 1024)
                             if not chunk:
@@ -350,6 +421,11 @@ def main() -> int:
         dest="paths",
         help="Worker filesystem path to extract; may be repeated.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Append to existing partial files from their current byte offset.",
+    )
     args = parser.parse_args()
     try:
         found = extract(
@@ -357,6 +433,7 @@ def main() -> int:
             args.region,
             args.output_dir,
             args.paths or list(DEFAULT_FILES),
+            args.resume,
         )
     except Exception as exc:
         print(f"Recovery failed: {exc}", file=sys.stderr)
