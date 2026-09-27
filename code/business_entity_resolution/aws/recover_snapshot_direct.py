@@ -209,6 +209,7 @@ class SnapshotStream(io.RawIOBase):
             "Could not connect to the endpoint URL",
             "ConnectTimeoutError",
             "ReadTimeoutError",
+            "Read timeout on endpoint URL",
             "EndpointConnectionError",
             "RequestThrottledException",
             "ThrottlingException",
