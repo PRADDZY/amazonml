@@ -40,17 +40,38 @@ DEFAULT_FILES = (
 def aws_json(args: list[str], env: dict[str, str] | None = None) -> dict:
     command_env = (env or os.environ).copy()
     command_env["AWS_PAGER"] = ""
-    result = subprocess.run(
-        ["aws", *args, "--output", "json"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=command_env,
-        timeout=180,
+    retryable = (
+        "Could not connect to the endpoint URL",
+        "ConnectTimeoutError",
+        "ReadTimeoutError",
+        "Read timeout on endpoint URL",
+        "EndpointConnectionError",
+        "RequestThrottledException",
+        "ThrottlingException",
+        "InternalServerException",
+        "ServiceUnavailable",
     )
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
-    return json.loads(result.stdout)
+    for attempt in range(4):
+        try:
+            result = subprocess.run(
+                ["aws", *args, "--output", "json"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=command_env,
+                timeout=180,
+            )
+            if result.returncode == 0:
+                return json.loads(result.stdout)
+            error = result.stderr.strip() or result.stdout.strip()
+        except subprocess.TimeoutExpired as exc:
+            error = f"Read timeout on endpoint URL: {exc}"
+        if attempt == 3 or not any(marker in error for marker in retryable):
+            raise RuntimeError(error)
+        delay = 2**attempt
+        print(f"Transient AWS CLI request timeout/error; retrying in {delay}s ({attempt + 1}/4).", flush=True)
+        time.sleep(delay)
+    raise RuntimeError("AWS CLI request failed after retries")
 
 
 def export_login_credentials() -> tuple[dict[str, str], datetime]:
@@ -347,6 +368,7 @@ def extract(
     output_dir: Path,
     paths: list[str],
     resume: bool = False,
+    workers: int = 8,
 ) -> int:
     from dissect.xfs.exceptions import FileNotFoundError as XFSFileNotFoundError
 
@@ -380,6 +402,7 @@ def extract(
             region,
             int(snapshot["VolumeSize"]) * 1024**3,
             scratch,
+            workers=workers,
         )
         try:
             filesystem, stream = open_xfs(image)
@@ -460,7 +483,10 @@ def main() -> int:
         action="store_true",
         help="Append to existing partial files from their current byte offset.",
     )
+    parser.add_argument("--workers", type=int, default=8, help="Parallel block reads (default: 8).")
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("workers must be at least 1")
     try:
         found = extract(
             args.snapshot_id,
@@ -468,6 +494,7 @@ def main() -> int:
             args.output_dir,
             args.paths or list(DEFAULT_FILES),
             args.resume,
+            args.workers,
         )
     except Exception as exc:
         print(f"Recovery failed: {exc}", file=sys.stderr)
