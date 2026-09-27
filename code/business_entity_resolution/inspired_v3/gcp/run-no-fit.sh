@@ -3,7 +3,8 @@ set -euo pipefail
 
 APP=/home/daithankarpratik/app
 OUT="$APP/output/no-fit"
-mkdir -p "$APP/no-fit-spark-tmp" "$OUT"
+SPARK_TMP="$APP/no-fit-spark-tmp-retry1"
+mkdir -p "$SPARK_TMP" "$OUT"
 
 if [[ -s "$OUT/matching_results.tsv" ]]; then
   echo "Refusing to overwrite $OUT/matching_results.tsv" >&2
@@ -16,18 +17,18 @@ fi
 
 export PYSPARK_PYTHON="$APP/venv/bin/python"
 export PYSPARK_DRIVER_PYTHON="$APP/venv/bin/python"
-export SPARK_LOCAL_DIRS="$APP/no-fit-spark-tmp"
+export SPARK_LOCAL_DIRS="$SPARK_TMP"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 
 nohup "$APP/venv/bin/spark-submit" \
   --master 'local[6]' \
   --driver-memory 32g \
   --conf spark.driver.maxResultSize=4g \
-  --conf "spark.local.dir=$APP/no-fit-spark-tmp" \
+  --conf "spark.local.dir=$SPARK_TMP" \
   --conf spark.default.parallelism=48 \
   --conf spark.sql.shuffle.partitions=48 \
   --conf spark.speculation=false \
-  --py-files "$APP/code/er_core.py" \
+  --py-files "$APP/code/er_core.py,$APP/code/sagemaker_spark_job.py" \
   "$APP/code/no_fit_submission.py" \
   --test-prefix "$APP/data/test" \
   --output-file "$OUT/matching_results.tsv" \
