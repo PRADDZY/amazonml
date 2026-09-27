@@ -58,7 +58,8 @@ def write_one_tsv(frame, destination: str) -> None:
     os.makedirs(parent, exist_ok=True)
     if os.path.exists(destination):
         raise FileExistsError(f"Refusing to overwrite an existing submission: {destination}")
-    with tempfile.TemporaryDirectory(prefix=".matching_parts_", dir=parent) as temp_dir:
+    with tempfile.TemporaryDirectory(prefix=".matching_stage_", dir=parent) as stage_parent:
+        temp_dir = os.path.join(stage_parent, "parts")
         (
             frame.coalesce(1)
             .write.mode("errorifexists")

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP=/home/daithankarpratik/app
 OUT="$APP/output/no-fit"
-SPARK_TMP="$APP/no-fit-spark-tmp-retry1"
+SPARK_TMP="$APP/no-fit-spark-tmp-retry2"
 mkdir -p "$SPARK_TMP" "$OUT"
 
 if [[ -s "$OUT/matching_results.tsv" ]]; then
