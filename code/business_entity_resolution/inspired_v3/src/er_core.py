@@ -42,6 +42,13 @@ PAIR_FEATURE_COLUMNS = (
 )
 
 
+def training_split_ranges(smoke_test: bool = False) -> tuple[tuple[int, int], ...]:
+    """Return disjoint half-open bucket ranges for fit, calibration, and audit."""
+    if smoke_test:
+        return ((0, 1), (1, 2), (2, 3))
+    return ((0, 80), (80, 90), (90, 100))
+
+
 def spark_s3_uri(uri: str, scheme: str = "s3a") -> str:
     """Select the S3 filesystem scheme required by the Spark runtime."""
     if scheme not in {"s3", "s3a"}:

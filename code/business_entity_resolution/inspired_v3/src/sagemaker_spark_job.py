@@ -17,6 +17,7 @@ import numpy as np
 from er_core import (
     FEATURE_NAMES, PAIR_FEATURE_COLUMNS, blocking_keys, normalize_address,
     normalize_name, romanize_text, select_operating_point, spark_s3_uri,
+    training_split_ranges,
 )
 
 from pyspark.sql import DataFrame, SparkSession, Window
@@ -298,6 +299,25 @@ def generate_candidates(queries: DataFrame, targets: DataFrame) -> DataFrame:
     return (
         evidence.withColumn("candidate_rank", F.row_number().over(candidate_window))
         .filter(F.col("candidate_rank") <= MAX_CANDIDATES_PER_SOURCE)
+    )
+
+
+def candidate_output_frame(all_source1: DataFrame, generated_candidates: DataFrame) -> DataFrame:
+    """Materialize every blocking candidate before the model applies its smaller cap."""
+    output_window = Window.partitionBy("source1_id").orderBy(
+        F.desc("retrieval_score"), F.asc("target_source"), F.asc("target_id")
+    )
+    candidate_lists = generated_candidates.withColumn(
+        "output_order", F.row_number().over(output_window)
+    ).groupBy("source1_id").agg(
+        F.sort_array(F.collect_list(F.struct("output_order", "target_id"))).alias("items")
+    ).select(
+        "source1_id",
+        F.expr("concat_ws(',', transform(items, x -> x.target_id))").alias("candidate_entity_ids"),
+    )
+    return all_source1.join(candidate_lists, "source1_id", "left").select(
+        F.col("source1_id").alias("source1_entity_id"),
+        F.coalesce(F.col("candidate_entity_ids"), F.lit("")).alias("candidate_entity_ids"),
     )
 
 
@@ -762,18 +782,17 @@ def run(args: argparse.Namespace) -> None:
     train_with_split = training_s1.withColumn(
         "split_bucket", F.pmod(F.xxhash64("entity_id"), F.lit(split_modulus))
     )
-    if args.smoke_test:
-        training_queries = train_with_split.filter(F.col("split_bucket") == 0).drop("split_bucket")
-        validation_queries = train_with_split.filter(F.col("split_bucket") == 1).drop("split_bucket")
-        audit_queries = train_with_split.filter(F.col("split_bucket") == 2).drop("split_bucket")
-    else:
-        training_queries = train_with_split.filter(F.col("split_bucket") < 5).drop("split_bucket")
-        validation_queries = train_with_split.filter(
-            (F.col("split_bucket") >= 5) & (F.col("split_bucket") < 10)
-        ).drop("split_bucket")
-        audit_queries = train_with_split.filter(
-            (F.col("split_bucket") >= 10) & (F.col("split_bucket") < 15)
-        ).drop("split_bucket")
+    fit_range, validation_range, audit_range = training_split_ranges(args.smoke_test)
+    training_queries = train_with_split.filter(
+        (F.col("split_bucket") >= fit_range[0]) & (F.col("split_bucket") < fit_range[1])
+    ).drop("split_bucket")
+    validation_queries = train_with_split.filter(
+        (F.col("split_bucket") >= validation_range[0])
+        & (F.col("split_bucket") < validation_range[1])
+    ).drop("split_bucket")
+    audit_queries = train_with_split.filter(
+        (F.col("split_bucket") >= audit_range[0]) & (F.col("split_bucket") < audit_range[1])
+    ).drop("split_bucket")
     fitting_and_validation = training_queries.unionByName(validation_queries)
     training_candidates = generate_candidates(fitting_and_validation, training_targets)
     training_features = build_pair_features(
@@ -846,7 +865,9 @@ def run(args: argparse.Namespace) -> None:
     test_s2 = read_source(spark, f"{test_prefix}/test_source2.tsv", "S2")
     test_s3 = read_source(spark, f"{test_prefix}/test_source3.tsv", "S3")
     test_targets = test_s2.unionByName(test_s3)
-    test_candidates = generate_candidates(test_s1, test_targets)
+    test_candidates = generate_candidates(test_s1, test_targets).persist(
+        StorageLevel.MEMORY_AND_DISK
+    )
     test_features = build_pair_features(test_s1, test_targets, test_candidates)
     test_scored = score_pair_rows(test_features, model).persist(StorageLevel.MEMORY_AND_DISK)
     selected = test_scored.filter(F.col("candidate_rank") <= cap)
@@ -854,21 +875,8 @@ def run(args: argparse.Namespace) -> None:
         F.col("target_source") == "S2", F.lit(source_thresholds["S2"])
     ).otherwise(F.lit(source_thresholds["S3"]))
 
-    global_order = Window.partitionBy("source1_id").orderBy(
-        F.desc("retrieval_score"), F.asc("target_source"), F.asc("target_id")
-    )
-    selected_ordered = selected.withColumn("output_order", F.row_number().over(global_order))
-    candidate_lists = selected_ordered.groupBy("source1_id").agg(
-        F.sort_array(F.collect_list(F.struct("output_order", "target_id"))).alias("items")
-    ).select(
-        "source1_id",
-        F.expr("concat_ws(',', transform(items, x -> x.target_id))").alias("candidate_entity_ids"),
-    )
     all_source1 = test_s1.select(F.col("entity_id").alias("source1_id"))
-    candidate_output = all_source1.join(candidate_lists, "source1_id", "left").select(
-        F.col("source1_id").alias("source1_entity_id"),
-        F.coalesce(F.col("candidate_entity_ids"), F.lit("")).alias("candidate_entity_ids"),
-    )
+    candidate_output = candidate_output_frame(all_source1, test_candidates)
 
     target_assignment_window = Window.partitionBy("target_id").orderBy(
         F.desc("probability"), F.asc("candidate_rank"), F.asc("source1_id"),
@@ -891,7 +899,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     match_pair_ids = matches.select("source1_id", "target_id").dropDuplicates()
-    candidate_pair_ids = selected.select("source1_id", "target_id").dropDuplicates()
+    candidate_pair_ids = test_candidates.select("source1_id", "target_id").dropDuplicates()
     assert_no_rows(match_pair_ids.join(candidate_pair_ids, ["source1_id", "target_id"], "left_anti"),
                    "predicted match missing from candidate set")
     assert_no_rows(candidate_output.groupBy("source1_entity_id").count().filter(F.col("count") != 1),
@@ -903,6 +911,12 @@ def run(args: argparse.Namespace) -> None:
         "selected candidates exceed the per-source cap",
     )
     assert_no_rows(
+        test_candidates.groupBy("source1_id", "target_source").count().filter(
+            F.col("count") > MAX_CANDIDATES_PER_SOURCE
+        ),
+        "blocking candidates exceed the per-source cap",
+    )
+    assert_no_rows(
         matches.groupBy("target_id").count().filter(F.col("count") > 1),
         "a target entity is assigned to more than one Source 1 entity",
     )
@@ -910,9 +924,9 @@ def run(args: argparse.Namespace) -> None:
     total_s1 = test_s1.count()
     if candidate_output.count() != total_s1 or matching_output.count() != total_s1:
         raise RuntimeError("Submission outputs do not contain exactly one row per test S1 entity")
-    candidate_total = selected.count()
+    candidate_total = test_candidates.count()
     per_query_counts = all_source1.join(
-        selected.groupBy("source1_id").count().withColumnRenamed("count", "candidate_count"),
+        test_candidates.groupBy("source1_id").count().withColumnRenamed("count", "candidate_count"),
         "source1_id", "left",
     ).fillna({"candidate_count": 0})
     distribution = per_query_counts.agg(
@@ -930,7 +944,7 @@ def run(args: argparse.Namespace) -> None:
     reduction_ratio = 1.0 - candidate_total / possible_pairs if possible_pairs else 0.0
     country_counts = (
         test_s1.select(F.col("entity_id").alias("source1_id"), "country")
-        .join(selected.groupBy("source1_id").count().withColumnRenamed("count", "candidate_count"),
+        .join(test_candidates.groupBy("source1_id").count().withColumnRenamed("count", "candidate_count"),
               "source1_id", "left")
         .fillna({"candidate_count": 0})
         .groupBy("country")
@@ -960,7 +974,9 @@ def run(args: argparse.Namespace) -> None:
         },
         "feature_names": list(FEATURE_NAMES),
         "training_pair_counts": class_counts,
+        "candidate_cap_per_source": MAX_CANDIDATES_PER_SOURCE,
         "selected_cap_per_source": cap,
+        "matching_candidate_pairs": int(selected.count()),
         "selected_thresholds": source_thresholds,
         "initial_global_threshold": global_threshold,
         "selected_candidate_recall": float(operating["candidate_recall"]),
@@ -982,7 +998,9 @@ def run(args: argparse.Namespace) -> None:
         "candidate_count_max": int(distribution["max"] or 0),
         "possible_same_country_pairs": int(possible_pairs),
         "candidate_reduction_ratio": float(reduction_ratio),
-        "test_candidate_sources_max": {"S2": cap, "S3": cap},
+        "test_candidate_sources_max": {
+            "S2": MAX_CANDIDATES_PER_SOURCE, "S3": MAX_CANDIDATES_PER_SOURCE,
+        },
         "per_country": {row["country"]: {
             "source1_rows": int(row["source1_rows"]),
             "candidate_pairs": int(row["candidate_pairs"] or 0),
@@ -993,6 +1011,7 @@ def run(args: argparse.Namespace) -> None:
     write_json(spark, metrics, f"{output_prefix}/metrics")
     LOG.info("Entity resolution complete: %s", json.dumps(metrics, sort_keys=True))
     test_scored.unpersist(blocking=False)
+    test_candidates.unpersist(blocking=False)
     spark.stop()
 
 

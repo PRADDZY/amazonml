@@ -8,11 +8,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from er_core import (
     FEATURE_NAMES, PAIR_FEATURE_COLUMNS, blocking_keys, normalize_name,
-    normalize_text, romanize_text,
+    normalize_text, romanize_text, training_split_ranges,
 )
 
 
 class InspiredBlockingTests(unittest.TestCase):
+    def test_full_training_split_uses_80_10_10_buckets(self):
+        ranges = training_split_ranges(smoke_test=False)
+        self.assertEqual(ranges, ((0, 80), (80, 90), (90, 100)))
+        for bucket in range(100):
+            owners = [start <= bucket < stop for start, stop in ranges]
+            self.assertEqual(sum(owners), 1, f"bucket {bucket} must be assigned once")
+
+    def test_smoke_split_remains_small_and_disjoint(self):
+        ranges = training_split_ranges(smoke_test=True)
+        self.assertEqual(ranges, ((0, 1), (1, 2), (2, 3)))
+
     def test_composite_blocks_cover_reordering_and_address_evidence(self):
         left = blocking_keys("Northwind Trading LLC", "15 Emerald Avenue Boston MA 02110")
         reordered = blocking_keys("Trading Northwind", "15 Emerald Ave Boston MA 02110")
