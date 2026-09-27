@@ -218,17 +218,21 @@ class SnapshotStream(io.RawIOBase):
         )
         for attempt in range(4):
             output_path.unlink(missing_ok=True)
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=180,
-            )
-            if result.returncode == 0:
-                break
-            error = result.stderr.strip() or result.stdout.strip()
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=180,
+                )
+                if result.returncode == 0:
+                    break
+                error = result.stderr.strip() or result.stdout.strip()
+            except subprocess.TimeoutExpired as exc:
+                result = None
+                error = f"Read timeout on endpoint URL: {exc}"
             if attempt == 3 or not any(marker in error for marker in retryable):
                 raise RuntimeError(f"GetSnapshotBlock({index}) failed: {error}")
             delay = 2**attempt
