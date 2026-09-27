@@ -212,20 +212,23 @@ def open_xfs(image: SnapshotStream):
     from dissect.volume.disk import Disk
     from dissect.xfs import XFS
 
-    disk = Disk(image)
     errors: list[str] = []
-    for partition in disk.partitions:
-        try:
-            stream = partition.open()
-            filesystem = XFS(stream)
-            filesystem.get("/")
-            print(
-                f"Using XFS partition {partition.number} "
-                f"(offset {partition.offset}, size {partition.size})"
-            )
-            return filesystem, stream
-        except Exception as exc:  # try remaining partitions if this isn't XFS
-            errors.append(f"partition {partition.number}: {exc}")
+    try:
+        disk = Disk(image)
+        for partition in disk.partitions:
+            try:
+                stream = partition.open()
+                filesystem = XFS(stream)
+                filesystem.get("/")
+                print(
+                    f"Using XFS partition {partition.number} "
+                    f"(offset {partition.offset}, size {partition.size})"
+                )
+                return filesystem, stream
+            except Exception as exc:  # try remaining partitions if this isn't XFS
+                errors.append(f"partition {partition.number}: {exc}")
+    except Exception as exc:
+        errors.append(f"partition table: {exc}")
 
     try:
         filesystem = XFS(image)
