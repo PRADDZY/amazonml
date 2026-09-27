@@ -111,6 +111,7 @@ class SnapshotStream(io.RawIOBase):
         self.aws_env = os.environ.copy()
         self.aws_env["AWS_PAGER"] = ""
         self.credential_expiry = datetime.min.replace(tzinfo=timezone.utc)
+        self.next_refresh_attempt = datetime.min.replace(tzinfo=timezone.utc)
         self._refresh_credentials()
 
         # Listing once avoids one ListSnapshotBlocks API call for every block
@@ -137,13 +138,20 @@ class SnapshotStream(io.RawIOBase):
         print(f"Indexed {len(self.block_tokens):,} populated snapshot blocks.", flush=True)
 
     def _refresh_credentials(self) -> None:
+        previous_expiry = self.credential_expiry
         credential_env, expiry = export_login_credentials()
         self.aws_env.update(credential_env)
         self.credential_expiry = expiry
+        now = datetime.now(timezone.utc)
+        if expiry <= previous_expiry:
+            self.next_refresh_attempt = now + timedelta(minutes=2)
+        else:
+            self.next_refresh_attempt = expiry - timedelta(minutes=5)
         print(f"AWS CLI worker credentials valid until {expiry.astimezone(timezone.utc).isoformat()}.", flush=True)
 
     def _ensure_credentials(self) -> None:
-        if datetime.now(timezone.utc) + timedelta(minutes=5) >= self.credential_expiry:
+        now = datetime.now(timezone.utc)
+        if now + timedelta(minutes=5) >= self.credential_expiry and now >= self.next_refresh_attempt:
             # Reads are issued in batches, so this refresh runs on the main
             # thread between batches and never races the GetSnapshotBlock calls.
             self._refresh_credentials()
@@ -183,32 +191,53 @@ class SnapshotStream(io.RawIOBase):
 
         output_path = self.scratch / f"block-{index}.bin"
         env = self.aws_env.copy()
-        result = subprocess.run(
-            [
-                "aws",
-                "ebs",
-                "get-snapshot-block",
-                "--region",
-                self.region,
-                "--snapshot-id",
-                self.snapshot_id,
-                "--block-index",
-                str(index),
-                "--block-token",
-                token,
-                str(output_path),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=180,
+        command = [
+            "aws",
+            "ebs",
+            "get-snapshot-block",
+            "--region",
+            self.region,
+            "--snapshot-id",
+            self.snapshot_id,
+            "--block-index",
+            str(index),
+            "--block-token",
+            token,
+            str(output_path),
+        ]
+        retryable = (
+            "Could not connect to the endpoint URL",
+            "ConnectTimeoutError",
+            "ReadTimeoutError",
+            "EndpointConnectionError",
+            "RequestThrottledException",
+            "ThrottlingException",
+            "InternalServerException",
+            "ServiceUnavailable",
         )
-        if result.returncode:
-            raise RuntimeError(
-                f"GetSnapshotBlock({index}) failed: "
-                f"{result.stderr.strip() or result.stdout.strip()}"
+        for attempt in range(4):
+            output_path.unlink(missing_ok=True)
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=180,
             )
+            if result.returncode == 0:
+                break
+            error = result.stderr.strip() or result.stdout.strip()
+            if attempt == 3 or not any(marker in error for marker in retryable):
+                raise RuntimeError(f"GetSnapshotBlock({index}) failed: {error}")
+            delay = 2**attempt
+            print(
+                f"Transient EBS read error for block {index}; retrying in {delay}s "
+                f"({attempt + 1}/4).",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
         try:
             metadata = json.loads(result.stdout)
             block = output_path.read_bytes()
