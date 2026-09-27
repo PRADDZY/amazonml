@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import OrderedDict
 from pathlib import Path
 from typing import BinaryIO
@@ -59,7 +60,8 @@ class SnapshotStream(io.RawIOBase):
         region: str,
         size: int,
         scratch: Path,
-        cache_blocks: int = 48,
+        cache_blocks: int = 96,
+        workers: int = 8,
     ) -> None:
         super().__init__()
         self.snapshot_id = snapshot_id
@@ -71,6 +73,29 @@ class SnapshotStream(io.RawIOBase):
         self.cache: OrderedDict[int, bytes] = OrderedDict()
         self.requests = 0
         self.downloaded_bytes = 0
+        self.executor = ThreadPoolExecutor(max_workers=workers)
+
+        # Listing once avoids one ListSnapshotBlocks API call for every block
+        # read. The CLI follows NextToken pages automatically; block tokens
+        # remain valid until the response's ExpiryTime.
+        page = aws_json(
+            [
+                "ebs",
+                "list-snapshot-blocks",
+                "--region",
+                self.region,
+                "--snapshot-id",
+                self.snapshot_id,
+                "--max-results",
+                "10000",
+            ]
+        )
+        if page.get("BlockSize") != BLOCK_SIZE:
+            raise RuntimeError(f"Unexpected EBS block size: {page.get('BlockSize')}")
+        self.block_tokens = {
+            item["BlockIndex"]: item["BlockToken"] for item in page.get("Blocks", [])
+        }
+        print(f"Indexed {len(self.block_tokens):,} populated snapshot blocks.", flush=True)
 
     def readable(self) -> bool:
         return True
@@ -100,90 +125,58 @@ class SnapshotStream(io.RawIOBase):
         buffer[: len(data)] = data
         return len(data)
 
+    def _fetch_block(self, index: int) -> bytes:
+        token = self.block_tokens.get(index)
+        if token is None:
+            return bytes(BLOCK_SIZE)
+
+        output_path = self.scratch / f"block-{index}.bin"
+        env = os.environ.copy()
+        env["AWS_PAGER"] = ""
+        result = subprocess.run(
+            [
+                "aws",
+                "ebs",
+                "get-snapshot-block",
+                "--region",
+                self.region,
+                "--snapshot-id",
+                self.snapshot_id,
+                "--block-index",
+                str(index),
+                "--block-token",
+                token,
+                str(output_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=180,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                f"GetSnapshotBlock({index}) failed: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        try:
+            metadata = json.loads(result.stdout)
+            block = output_path.read_bytes()
+        finally:
+            output_path.unlink(missing_ok=True)
+        if len(block) != BLOCK_SIZE:
+            raise IOError(f"block {index} had {len(block)} bytes, expected {BLOCK_SIZE}")
+        checksum = base64.b64decode(metadata["Checksum"])
+        if hashlib.sha256(block).digest() != checksum:
+            raise IOError(f"SHA-256 validation failed for EBS block {index}")
+        return block
+
     def _get_block(self, index: int) -> bytes:
         cached = self.cache.get(index)
         if cached is not None:
             self.cache.move_to_end(index)
             return cached
-
-        # EBS block tokens are short-lived and can be invalidated by another
-        # list request. Fetch the token and its data back-to-back for each miss.
-        args = [
-            "ebs",
-            "list-snapshot-blocks",
-            "--region",
-            self.region,
-            "--snapshot-id",
-            self.snapshot_id,
-        ]
-        if index > 0:
-            # The API's starting index is exclusive; subtract one to include
-            # the requested block if it is populated.
-            args.extend(["--starting-block-index", str(index - 1)])
-        args.extend(["--max-results", "100", "--no-paginate"])
-        page = aws_json(args)
-        token = next(
-            (
-                item["BlockToken"]
-                for item in page.get("Blocks", [])
-                if item["BlockIndex"] == index
-            ),
-            None,
-        )
-        if token is None:
-            block = bytes(BLOCK_SIZE)
-        else:
-            output_path = self.scratch / f"block-{index}.bin"
-            env = os.environ.copy()
-            env["AWS_PAGER"] = ""
-            result = subprocess.run(
-                [
-                    "aws",
-                    "ebs",
-                    "get-snapshot-block",
-                    "--region",
-                    self.region,
-                    "--snapshot-id",
-                    self.snapshot_id,
-                    "--block-index",
-                    str(index),
-                    "--block-token",
-                    token,
-                    str(output_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=180,
-            )
-            if result.returncode:
-                raise RuntimeError(
-                    f"GetSnapshotBlock({index}) failed: "
-                    f"{result.stderr.strip() or result.stdout.strip()}"
-                )
-            try:
-                metadata = json.loads(result.stdout)
-                block = output_path.read_bytes()
-            finally:
-                output_path.unlink(missing_ok=True)
-            if len(block) != BLOCK_SIZE:
-                raise IOError(
-                    f"block {index} had {len(block)} bytes, expected {BLOCK_SIZE}"
-                )
-            checksum = base64.b64decode(metadata["Checksum"])
-            if hashlib.sha256(block).digest() != checksum:
-                raise IOError(f"SHA-256 validation failed for EBS block {index}")
-            self.requests += 1
-            self.downloaded_bytes += len(block)
-            if self.requests % 100 == 0:
-                print(
-                    f"Read {self.requests} EBS blocks "
-                    f"({self.downloaded_bytes / 1024**2:.1f} MiB)",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
+        block = self._fetch_block(index)
         self.cache[index] = block
         self.cache.move_to_end(index)
         while len(self.cache) > self.cache_blocks:
@@ -196,6 +189,30 @@ class SnapshotStream(io.RawIOBase):
         if size is None or size < 0:
             size = self.size - self.position
         size = min(size, self.size - self.position)
+        if size == 0:
+            return b""
+        first = self.position // BLOCK_SIZE
+        last = (self.position + size - 1) // BLOCK_SIZE
+        missing = [index for index in range(first, last + 1) if index not in self.cache]
+        futures = {self.executor.submit(self._fetch_block, index): index for index in missing}
+        for future in as_completed(futures):
+            index = futures[future]
+            block = future.result()
+            self.cache[index] = block
+            self.cache.move_to_end(index)
+            if index in self.block_tokens:
+                self.requests += 1
+                self.downloaded_bytes += len(block)
+                if self.requests % 100 == 0:
+                    print(
+                        f"Read {self.requests} EBS blocks "
+                        f"({self.downloaded_bytes / 1024**2:.1f} MiB)",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        while len(self.cache) > self.cache_blocks:
+            self.cache.popitem(last=False)
+
         chunks: list[bytes] = []
         remaining = size
         while remaining:
@@ -273,38 +290,42 @@ def extract(snapshot_id: str, region: str, output_dir: Path, paths: list[str]) -
             int(snapshot["VolumeSize"]) * 1024**3,
             scratch,
         )
-        filesystem, stream = open_xfs(image)
-        found = 0
-        for remote_path in paths:
-            try:
-                entry = filesystem.get(remote_path)
-                if entry.filetype == stat.S_IFDIR:
-                    print(f"Directory, skipped: {remote_path}")
-                    continue
-                file_obj: BinaryIO = entry.open()
-                destination = output_dir / Path(remote_path.lstrip("/"))
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with file_obj, destination.open("wb") as output:
-                    while True:
-                        chunk = file_obj.read(8 * 1024 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                found += 1
-                size = destination.stat().st_size
-                note = ""
-                if destination.suffix == ".parquet":
-                    with destination.open("rb") as parquet:
-                        head = parquet.read(4)
-                        parquet.seek(max(0, size - 4))
-                        tail = parquet.read(4)
-                    note = f" | parquet magic {head!r} ... {tail!r}"
-                print(f"Extracted {remote_path} -> {destination} ({size:,} bytes){note}")
-            except XFSFileNotFoundError:
-                print(f"Not present: {remote_path}")
-        close = getattr(stream, "close", None)
-        if close:
-            close()
+        try:
+            filesystem, stream = open_xfs(image)
+            found = 0
+            for remote_path in paths:
+                try:
+                    entry = filesystem.get(remote_path)
+                    if entry.filetype == stat.S_IFDIR:
+                        print(f"Directory, skipped: {remote_path}")
+                        continue
+                    file_obj: BinaryIO = entry.open()
+                    destination = output_dir / Path(remote_path.lstrip("/"))
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with file_obj, destination.open("wb") as output:
+                        while True:
+                            chunk = file_obj.read(8 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            output.write(chunk)
+                            output.flush()
+                    found += 1
+                    size = destination.stat().st_size
+                    note = ""
+                    if destination.suffix == ".parquet":
+                        with destination.open("rb") as parquet:
+                            head = parquet.read(4)
+                            parquet.seek(max(0, size - 4))
+                            tail = parquet.read(4)
+                        note = f" | parquet magic {head!r} ... {tail!r}"
+                    print(f"Extracted {remote_path} -> {destination} ({size:,} bytes){note}", flush=True)
+                except XFSFileNotFoundError:
+                    print(f"Not present: {remote_path}", flush=True)
+            close = getattr(stream, "close", None)
+            if close:
+                close()
+        finally:
+            image.executor.shutdown(wait=True, cancel_futures=True)
         print(
             f"Finished: {found} file(s), {image.requests} EBS data blocks, "
             f"{image.downloaded_bytes / 1024**2:.1f} MiB downloaded."
